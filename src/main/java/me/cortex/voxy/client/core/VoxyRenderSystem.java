@@ -1,7 +1,7 @@
 package me.cortex.voxy.client.core;
 
-import com.mojang.blaze3d.opengl.GlConst;
-import com.mojang.blaze3d.opengl.GlStateManager;
+import com.mojang.blaze3d.platform.GlConst;
+import com.mojang.blaze3d.platform.GlStateManager;
 import me.cortex.voxy.client.TimingStatistics;
 import me.cortex.voxy.client.VoxyClient;
 import me.cortex.voxy.client.config.VoxyConfig;
@@ -26,6 +26,7 @@ import me.cortex.voxy.client.core.rendering.section.geometry.IGeometryData;
 import me.cortex.voxy.client.core.rendering.util.DownloadStream;
 import me.cortex.voxy.client.core.rendering.util.PrintfDebugUtil;
 import me.cortex.voxy.client.core.rendering.util.UploadStream;
+import me.cortex.voxy.client.core.rendering.util.VoxyFogParameters;
 import me.cortex.voxy.client.core.util.GPUTiming;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.Logger;
@@ -33,7 +34,6 @@ import me.cortex.voxy.common.thread.ServiceManager;
 import me.cortex.voxy.common.util.GlobalCleaner;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.VoxyCommon;
-import net.caffeinemc.mods.sodium.client.util.FogParameters;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import org.jetbrains.annotations.Nullable;
@@ -92,7 +92,8 @@ public class VoxyRenderSystem {
         if (Minecraft.getInstance().options.renderDistance().get()<3) {
             String msg = "Voxy: Having a vanilla render distance of 2 can cause rare culling near the edge of your screen issues, please use 3 or more";
             Logger.warn(msg);
-            Minecraft.getInstance().gui.chatListener().handleSystemMessage(Component.literal(msg), false);
+            // 1.21.1: Minecraft.getChatListener() (ref Minecraft.java:2914), no Gui.chatListener()
+            Minecraft.getInstance().getChatListener().handleSystemMessage(Component.literal(msg), false);
         }
 
         //Fking HATE EVERYTHING AAAAAAAAAAAAAAAA
@@ -149,8 +150,10 @@ public class VoxyRenderSystem {
             this.viewportSelector = new ViewportSelector<>(sectionRenderer::createViewport);
 
             {
-                int minSec = Minecraft.getInstance().level.getMinSectionY() >> 5;
-                int maxSec = (Minecraft.getInstance().level.getMaxSectionY() - 1) >> 5;
+                // 1.21.1: LevelHeightAccessor.getMinSection()/getMaxSection() (ref LevelHeightAccessor.java:19-25),
+                // getMaxSection() is exclusive like 26.2's getMaxSectionY() hence the -1
+                int minSec = Minecraft.getInstance().level.getMinSection() >> 5;
+                int maxSec = (Minecraft.getInstance().level.getMaxSection() - 1) >> 5;
 
                 //Do some very cheeky stuff for MiB
                 if (VoxyCommon.IS_MINE_IN_ABYSS) {//TODO: make this somehow configurable
@@ -187,7 +190,8 @@ public class VoxyRenderSystem {
     }
 
 
-    public Viewport<?> setupViewport(Matrix4fc vanillaProjection, Matrix4fc modelView, FogParameters fogParameters, int width, int height, double cameraX, double cameraY, double cameraZ) {
+    // 1.21.1: fog is a VoxyFogParameters (contract C1/C3), width/height are the size of the target the caller renders into
+    public Viewport<?> setupViewport(Matrix4fc vanillaProjection, Matrix4fc modelView, VoxyFogParameters fogParameters, int width, int height, double cameraX, double cameraY, double cameraZ) {
         var viewport = this.getViewport();
         if (viewport == null) {
             return null;
@@ -364,11 +368,13 @@ public class VoxyRenderSystem {
             for (int i = 0; i < oldBufferBindings.length; i++) {
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, i, oldBufferBindings[i]);
             }
-            GlStateManager._blendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+            // 1.21.1: GlStateManager._blendEquation(int) (ref GlStateManager.java:119) and _disableBlend() without
+            // arguments (ref GlStateManager.java:89); there is no _blendEquationSeparate on this version
+            GlStateManager._blendEquation(GL_FUNC_ADD);
             glBlendEquation(GL_FUNC_ADD);
             GlStateManager._blendFuncSeparate(0,0, 0, 0);
             glBlendFunc(0, 0);
-            GlStateManager._disableBlend(0);
+            GlStateManager._disableBlend();
             glDisable(GL_BLEND);
             GlStateManager._depthFunc(GL_LESS);
             glDepthFunc(GL_LESS);
@@ -431,6 +437,56 @@ public class VoxyRenderSystem {
         return Minecraft.getInstance().options.getEffectiveRenderDistance()*16;
     }
 
+    private static boolean warnedDefaultFramebuffer = false;
+
+    /**
+     * 1.21.1 (contract C3): Sodium 0.8.13's TerrainRenderPass has no render target and there is no GpuTextureView,
+     * so the Sodium/Iris render hooks source Voxy's depth/colour from the framebuffer that is CURRENTLY BOUND FOR
+     * DRAWING when the CUTOUT pass ends - the vanilla main RenderTarget (depth and colour are GL_TEXTURE_2D
+     * attachments, ref RenderTarget.java:118-127) or Iris' gbuffer framebuffer (bound through
+     * GlStateManager._glBindFramebuffer(GL_FRAMEBUFFER), Iris GlFramebuffer.java:84-86, depth attached as a texture,
+     * GlFramebuffer.java:36). This is what upstream 12111 did with glGetNamedFramebufferAttachmentParameteri on the
+     * bound framebuffer (upstream AbstractRenderPipeline.java:153) and what Roxy's RoxyFramebufferBridge does.
+     *
+     * @return {depthTexture, colourTexture, width, height}; width/height are the level 0 size of the depth texture
+     * (Roxy RoxyFramebufferBridge.textureWidth/textureHeight), which for the main target equals RenderTarget.width/height
+     */
+    public static int[] getBoundFramebufferTextures() {
+        int drawFb = GL11.glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING);
+        int depthTexture = 0;
+        int colourTexture = 0;
+        if (drawFb != 0) {
+            depthTexture = getBoundAttachmentTexture(GL_DEPTH_ATTACHMENT);
+            colourTexture = getBoundAttachmentTexture(GL_COLOR_ATTACHMENT0);
+        }
+        if (drawFb == 0 || depthTexture == 0) {
+            //The default framebuffer (or a framebuffer without texture attachments) cannot be sampled from, fall back
+            // to the main render target which is what vanilla/sodium render the terrain into
+            var mainTarget = Minecraft.getInstance().getMainRenderTarget();
+            if (!warnedDefaultFramebuffer) {
+                warnedDefaultFramebuffer = true;
+                Logger.warn("Voxy: the bound draw framebuffer (" + drawFb + ") has no depth texture attachment, falling back to the main render target (fb " + mainTarget.frameBufferId + ")");
+            }
+            depthTexture = mainTarget.getDepthTextureId();
+            colourTexture = mainTarget.getColorTextureId();
+            if (depthTexture == 0 || depthTexture == -1) {
+                throw new IllegalStateException("Cannot source the depth texture, neither the bound framebuffer " + drawFb + " nor the main render target have a depth texture");
+            }
+            return new int[]{depthTexture, colourTexture, mainTarget.width, mainTarget.height};
+        }
+        int width = glGetTextureLevelParameteri(depthTexture, 0, GL_TEXTURE_WIDTH);
+        int height = glGetTextureLevelParameteri(depthTexture, 0, GL_TEXTURE_HEIGHT);
+        return new int[]{depthTexture, colourTexture, width, height};
+    }
+
+    private static int getBoundAttachmentTexture(int attachment) {
+        int type = glGetFramebufferAttachmentParameteri(GL_DRAW_FRAMEBUFFER, attachment, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE);
+        if (type != GL_TEXTURE) {
+            return 0;//GL_NONE or GL_RENDERBUFFER, cannot be sampled
+        }
+        return glGetFramebufferAttachmentParameteri(GL_DRAW_FRAMEBUFFER, attachment, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME);
+    }
+
     /*
     private static float getGameFoV() {
         var client = Minecraft.getInstance();
@@ -467,7 +523,19 @@ public class VoxyRenderSystem {
     private static Matrix4f computeProjectionMat(RenderProperties properties, Matrix4fc base) {
 
         //this jank is to capture the extra crap they inject like viewbobbing
-        var rawMCProj = Minecraft.getInstance().gameRenderer.gameRenderState().levelRenderState.cameraRenderState.projectionMatrix;
+        // 1.21.1: there is no gameRenderState()/cameraRenderState.projectionMatrix. GameRenderer.renderLevel builds
+        // the level projection as getProjectionMatrix(fov) and then multiplies the view-bob/hurt/nausea pose into it
+        // before RenderSystem.setProjectionMatrix (ref GameRenderer.java:1249-1272), so `base` (Sodium's
+        // ChunkRenderMatrices.projection() == RenderSystem.getProjectionMatrix(), Sodium ChunkRenderMatrices.java:11)
+        // is rawProjection * extra. The raw projection is a plain perspective(fov, aspect, 0.05, getDepthFar()) (optionally
+        // pre-multiplied by the zoom translate/scale, ref GameRenderer.java:980-993), rebuilt here with
+        // GameRenderer.getProjectionMatrix(double) (public). The effective fov is NOT needed: the result below is
+        // rawProj' * inverse(rawProj) * base where rawProj' only differs from rawProj in m22/m32, and for a perspective
+        // matrix P' * P^-1 is the identity in the x/y rows and depends on the near/far planes only (the fov/aspect
+        // scale cancels; the zoom translate/scale commutes with a matrix that only touches the z/w rows), which is why
+        // upstream 12111 / the prior port (which used an access-widened getFov) and this formulation give the same matrix.
+        var gameRenderer = Minecraft.getInstance().gameRenderer;
+        var rawMCProj = gameRenderer.getProjectionMatrix((double) Minecraft.getInstance().options.fov().get().intValue());
         var extraProjection = rawMCProj.invert(new Matrix4f()).mul(base);
 
         float near = getVanillaRenderDistance()<=32.0f?8f:16f;

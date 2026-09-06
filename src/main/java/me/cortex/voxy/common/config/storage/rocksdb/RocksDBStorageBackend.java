@@ -170,6 +170,18 @@ public class RocksDBStorageBackend extends StorageBackend {
     }
 
     @Override
+    public boolean sectionExists(long key) {
+        // Key-only lookup with no value copy: RocksDB.keyExists(ColumnFamilyHandle, ReadOptions, ByteBuffer)
+        // (rocksdbjni 10.2.1) does a bloom/memtable keyMayExist followed by a confirming read in a single
+        // JNI crossing and returns only the boolean; the key buffer must be direct (stack.malloc is).
+        try (var stack = MemoryStack.stackPush()) {
+            var buffer = stack.malloc(8);
+            MemoryUtil.memPutLong(MemoryUtil.memAddress(buffer), Long.reverseBytes(swizzlePos(key)));
+            return this.db.keyExists(this.worldSections, this.sectionReadOps, buffer);
+        }
+    }
+
+    @Override
     public void setSectionData(long key, MemoryBuffer data) {
         try (var stack = MemoryStack.stackPush()) {
             var keyBuff = stack.calloc(8);

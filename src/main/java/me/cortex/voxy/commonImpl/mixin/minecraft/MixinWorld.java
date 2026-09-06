@@ -5,6 +5,7 @@ import me.cortex.voxy.commonImpl.WorldIdentifier;
 import net.minecraft.core.Holder;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.storage.WritableLevelData;
@@ -14,16 +15,22 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+import java.util.function.Supplier;
+
+//NOTE: this mixin is applied on BOTH dists (common.voxy.mixins.json) and must only reference common classes
 @Mixin(Level.class)
 public class MixinWorld implements IWorldGetIdentifier {
     @Unique
     private WorldIdentifier identifier;
 
+    // 1.21.1: Level(WritableLevelData, ResourceKey<Level>, RegistryAccess, Holder<DimensionType>,
+    //                Supplier<ProfilerFiller>, boolean isClientSide, boolean isDebug, long biomeZoomSeed, int maxChainedNeighborUpdates)
     @Inject(method = "<init>", at = @At("RETURN"))
     private void voxy$injectIdentifier(WritableLevelData properties,
                                        ResourceKey<Level> key,
                                        RegistryAccess registryManager,
                                        Holder<DimensionType> dimensionEntry,
+                                       Supplier<ProfilerFiller> profiler,
                                        boolean isClient,
                                        boolean debugWorld,
                                        long seed,

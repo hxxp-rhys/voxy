@@ -2,29 +2,33 @@ package me.cortex.voxy.commonImpl;
 
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.config.Serialization;
-import net.fabricmc.api.EnvType;
-import net.fabricmc.api.ModInitializer;
-import net.fabricmc.loader.api.FabricLoader;
-import net.fabricmc.loader.api.ModContainer;
 
-public class VoxyCommon implements ModInitializer {
+/**
+ * Common (client + dedicated server) state of voxy.
+ *
+ * 1.21.1/NeoForge: no longer a Fabric {@code ModInitializer}; the mod entry point is {@link me.cortex.voxy.Voxy}.
+ * This class is initialised very early (from mixin code such as {@code MixinWorld}/{@code WorldIdentifier} or
+ * {@code MixinRenderSystem}, i.e. possibly before {@code ModList} exists), so every loader query goes through
+ * {@link PlatformUtil} which only relies on {@code LoadingModList}/{@code FMLLoader}. Nothing here may touch a
+ * client class: on a dedicated server this class is loaded through {@code Level} construction.
+ */
+public class VoxyCommon {
     public static final String MOD_VERSION;
     public static final boolean IS_DEDICATED_SERVER;
     public static final boolean IS_IN_MINECRAFT;
 
     static {
-        ModContainer mod = (ModContainer) FabricLoader.getInstance().getModContainer("voxy").orElse(null);
-        if (mod == null) {
+        if (!PlatformUtil.isInMinecraft()) {
             IS_IN_MINECRAFT = false;
             Logger.error("Running voxy without minecraft");
             MOD_VERSION = "<UNKNOWN>";
             IS_DEDICATED_SERVER = false;
         } else {
             IS_IN_MINECRAFT = true;
-            var version = mod.getMetadata().getVersion().getFriendlyString();
-            var commit = mod.getMetadata().getCustomValue("commit").getAsString();
-            MOD_VERSION = version + "-" + commit.substring(0,7);
-            IS_DEDICATED_SERVER = FabricLoader.getInstance().getEnvironmentType() == EnvType.SERVER;
+            var version = PlatformUtil.modVersion();
+            var commit = PlatformUtil.commitHash();
+            MOD_VERSION = version + "-" + (commit.length() > 7 ? commit.substring(0, 7) : commit);
+            IS_DEDICATED_SERVER = PlatformUtil.isDedicatedServer();
             Serialization.init();
         }
     }
@@ -40,11 +44,6 @@ public class VoxyCommon implements ModInitializer {
 
     public static void breakpoint() {
         int breakpoint = 0;
-    }
-
-    @Override
-    public void onInitialize() {
-
     }
 
     public interface IInstanceFactory {VoxyInstance create();}

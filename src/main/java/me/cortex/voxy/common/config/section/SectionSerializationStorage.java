@@ -45,6 +45,12 @@ public class SectionSerializationStorage extends SectionStorage {
     }
 
 
+    //RMN LOD resync: key-only probe, never deserialises or allocates a section (see SectionStorage#sectionExists)
+    @Override
+    public boolean sectionExists(long key) {
+        return this.backend.sectionExists(key);
+    }
+
     @Override
     public void saveSection(WorldSection section) {
         var saveData = SaveLoadSystem3.serialize(section);

@@ -37,6 +37,12 @@ public class ReadonlyCachingLayer extends StorageBackend {
         throw new IllegalStateException("Not yet implemented");
     }
 
+    //Pure probe: unlike getSectionData this does NOT populate the cache on a miss
+    @Override
+    public boolean sectionExists(long key) {
+        return this.cache.sectionExists(key) || this.onMiss.sectionExists(key);
+    }
+
     @Override
     public void setSectionData(long key, MemoryBuffer data) {
         this.cache.setSectionData(key, data);

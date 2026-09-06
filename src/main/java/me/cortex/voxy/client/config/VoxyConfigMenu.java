@@ -1,6 +1,7 @@
 package me.cortex.voxy.client.config;
 
 import me.cortex.voxy.client.ClientSessionEvents;
+import me.cortex.voxy.client.LodResyncVerifier;
 import me.cortex.voxy.client.config.SodiumConfigBuilder.*;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.NormalRenderPipeline;
@@ -15,7 +16,7 @@ import net.caffeinemc.mods.sodium.api.config.option.OptionImpact;
 import net.caffeinemc.mods.sodium.api.config.option.Range;
 import net.caffeinemc.mods.sodium.api.config.structure.ConfigBuilder;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 
 import java.util.Locale;
 
@@ -27,7 +28,7 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
         var CFG = VoxyConfig.CONFIG;
 
         var cc = B.registerModOptions("voxy", "Voxy", VoxyCommon.MOD_VERSION)
-                .setIcon(Identifier.parse("voxy:icon.png"));
+                .setIcon(ResourceLocation.parse("voxy:icon.png"));
 
         final var RENDER_RELOAD = OptionFlag.REQUIRES_RENDERER_RELOAD.getId().toString();
 
@@ -57,6 +58,8 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                                 if (vrsh != null) {
                                                     vrsh.voxy$shutdownRenderer();
                                                 }
+                                                // 1.21.1: RMN LOD resync must stop before the instance goes away (contract C8/C10 semantics for the menu toggle)
+                                                LodResyncVerifier.stopForTeardown();
                                                 VoxyCommon.shutdownInstance();
                                             }
                                         }).setPostChangeFlags(RENDER_RELOAD, "voxy:iris_reload").setEnabler(null)

@@ -50,6 +50,11 @@ public class FragmentedStorageBackendAdaptor extends StorageBackend {
     }
 
     @Override
+    public boolean sectionExists(long key) {
+        return this.backends[this.getSegmentId(key)].sectionExists(key);
+    }
+
+    @Override
     public void setSectionData(long key, MemoryBuffer data) {
         this.backends[this.getSegmentId(key)].setSectionData(key, data);
     }

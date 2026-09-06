@@ -1,85 +1,121 @@
 package me.cortex.voxy.client.core.model.bakery;
 
-import com.mojang.blaze3d.GpuFormat;
-import com.mojang.blaze3d.opengl.GlTexture;
 import com.mojang.blaze3d.vertex.PoseStack;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import me.cortex.voxy.client.core.model.ModelFactory;
 import me.cortex.voxy.common.util.UnsafeUtil;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.block.BlockAndTintGetter;
-import net.minecraft.client.renderer.block.FluidRenderer;
-import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
-import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
+import net.minecraft.client.renderer.ItemBlockRenderTypes;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.block.LiquidBlockRenderer;
+import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.resources.Identifier;
 import net.minecraft.tags.BlockTags;
-import net.minecraft.world.level.CardinalLighting;
+import net.minecraft.world.level.BlockAndTintGetter;
 import net.minecraft.world.level.ColorResolver;
+import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LightChunk;
+import net.minecraft.world.level.chunk.LightChunkGetter;
 import net.minecraft.world.level.levelgen.SingleThreadedRandomSource;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.level.material.FluidState;
+import net.neoforged.neoforge.client.model.data.ModelData;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 import org.lwjgl.system.MemoryUtil;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Arrays;
 
 import static org.lwjgl.opengl.ARBDirectStateAccess.glGetTextureImage;
+import static org.lwjgl.opengl.ARBDirectStateAccess.glGetTextureLevelParameteri;
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL11C.GL_RGBA;
 import static org.lwjgl.opengl.GL12.GL_PACK_IMAGE_HEIGHT;
 import static org.lwjgl.opengl.GL15C.glBindBuffer;
 import static org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER;
+import static org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER_BINDING;
 import static org.lwjgl.opengl.GL30C.GL_FRAMEBUFFER;
+import static org.lwjgl.opengl.GL30C.GL_FRAMEBUFFER_BINDING;
 import static org.lwjgl.opengl.GL30C.glBindFramebuffer;
 
 public class SoftwareModelTextureBakery {
     //Note: the first bit of metadata is if alpha discard is enabled
     private static final Matrix4f[] VIEWS = new Matrix4f[6];
 
+    //Same seed for every model (and for every face of a model) so that multi variant models always bake the same variant
+    private static final long BAKE_SEED = 42L;
+    private static final Direction[] BAKE_DIRECTIONS = {Direction.DOWN, Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST, null};
+
     private final ReuseVertexConsumer opaqueVC = new ReuseVertexConsumer();
     private final ReuseVertexConsumer translucentVC = new ReuseVertexConsumer(1/*has discard*/);
     private final SoftwareRasterizer rasterizer = new SoftwareRasterizer(ModelFactory.MODEL_TEXTURE_SIZE);
 
-    private final FluidRenderer fr;
+    //1.21.1: BakedQuads keep their tint index but there is no per block tint source list, so the indices used by the
+    // last baked model are recorded here for the ModelFactory tinting logic
+    private final IntOpenHashSet tintIndices = new IntOpenHashSet();
+
+    private final LiquidBlockRenderer fr;
     public SoftwareModelTextureBakery() {
-        this.fr = new FluidRenderer(Minecraft.getInstance().getModelManager().getFluidStateModelSet());
+        //1.21.1: the fluid renderer is owned by the BlockRenderDispatcher (BlockRenderDispatcher.getLiquidBlockRenderer)
+        this.fr = Minecraft.getInstance().getBlockRenderer().getLiquidBlockRenderer();
     }
 
     public void setupTexture() {
-        var tex = Minecraft.getInstance().getTextureManager().getTexture(Identifier.fromNamespaceAndPath("minecraft", "textures/atlas/blocks.png")).getTexture();
-        if (tex.getFormat() != GpuFormat.RGBA8_UNORM) {
-            throw new IllegalStateException("Block atlas not rgba8: " + tex.getFormat());
-        }
+        //1.21.1: the block atlas is always RGBA8 (TextureAtlas.upload -> TextureUtil.prepareImage with InternalGlFormat.RGBA)
+        // and its dimensions are package private, so query them from the GL texture object instead
+        int texId = Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS).getId();
 
         int targetMipLevel = 0;// Math.min(tex.getMipLevels(), 4)-1;//todo: we want to target the mip layer that has the 16x16 sized textures
 
-        int width = tex.getWidth(targetMipLevel);
-        int height = tex.getHeight(targetMipLevel);
+        int width = glGetTextureLevelParameteri(texId, targetMipLevel, GL_TEXTURE_WIDTH);
+        int height = glGetTextureLevelParameteri(texId, targetMipLevel, GL_TEXTURE_HEIGHT);
+        if (width <= 0 || height <= 0) {
+            throw new IllegalStateException("Block atlas has invalid dimensions: " + width + "x" + height);
+        }
 
         //Just do it ourselves as doing it with b3d has some issues, (doing it ourselves is also just much much much shorter)
         var texture = new int[width * height];
 
+        //1.21.1: vanilla still reads textures back with glGetTexImage (screenshots etc) so the pack state
+        // must be restored after the readback (same as Roxy's RoxyTextureBridge.readTexture)
+        int prevFramebuffer = glGetInteger(GL_FRAMEBUFFER_BINDING);
+        int prevPackBuffer = glGetInteger(GL_PIXEL_PACK_BUFFER_BINDING);
+        int prevRowLength = glGetInteger(GL_PACK_ROW_LENGTH);
+        int prevImageHeight = glGetInteger(GL_PACK_IMAGE_HEIGHT);
+        int prevSkipRows = glGetInteger(GL_PACK_SKIP_ROWS);
+        int prevSkipPixels = glGetInteger(GL_PACK_SKIP_PIXELS);
+        int prevAlignment = glGetInteger(GL_PACK_ALIGNMENT);
+
         glFlush();
         glFinish();
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        glPixelStorei(GL_PACK_ROW_LENGTH, width);
-        glPixelStorei(GL_PACK_IMAGE_HEIGHT, 0);
-        glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-        glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-        glPixelStorei(GL_PACK_ALIGNMENT, 4);
-        glGetTextureImage(((GlTexture) tex).glId(), 0, GL_RGBA, GL_UNSIGNED_BYTE, texture);
+        try {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            glPixelStorei(GL_PACK_ROW_LENGTH, width);
+            glPixelStorei(GL_PACK_IMAGE_HEIGHT, 0);
+            glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+            glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+            glPixelStorei(GL_PACK_ALIGNMENT, 4);
+            glGetTextureImage(texId, targetMipLevel, GL_RGBA, GL_UNSIGNED_BYTE, texture);
+        } finally {
+            glPixelStorei(GL_PACK_ROW_LENGTH, prevRowLength);
+            glPixelStorei(GL_PACK_IMAGE_HEIGHT, prevImageHeight);
+            glPixelStorei(GL_PACK_SKIP_ROWS, prevSkipRows);
+            glPixelStorei(GL_PACK_SKIP_PIXELS, prevSkipPixels);
+            glPixelStorei(GL_PACK_ALIGNMENT, prevAlignment);
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, prevPackBuffer);
+            glBindFramebuffer(GL_FRAMEBUFFER, prevFramebuffer);
+        }
         this.rasterizer.setSamplerTexture(texture, width, height);
     }
 
@@ -87,40 +123,88 @@ public class SoftwareModelTextureBakery {
         if (state.getRenderShape() == RenderShape.INVISIBLE) {
             return;//Dont bake if invisible
         }
+        //1.21.1: block models are BakedModels served by the BlockRenderDispatcher; the per quad layer of 26.2
+        // (BlockStateModelPart.materialInfo().layer()) is instead the RenderType the quads are requested for via
+        // NeoForge's BakedModel.getRenderTypes(state, random, ModelData)/getQuads(state, dir, random, ModelData, RenderType)
         var model = Minecraft.getInstance()
-                .getModelManager()
-                .getBlockStateModelSet()
-                .get(state);
+                .getBlockRenderer()
+                .getBlockModel(state);
 
-        List<BlockStateModelPart> out = new ArrayList<>();
-        model.collectParts(new SingleThreadedRandomSource(42L), out);
-        for (var part : out) {
-            for (Direction direction : new Direction[]{Direction.DOWN, Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST, null}) {
-                var quads = part.getQuads(direction);
-                for (var quad : quads) {
-                    (quad.materialInfo().layer()==ChunkSectionLayer.TRANSLUCENT?this.translucentVC:this.opaqueVC)
-                            .quad(quad, state.is(BlockTags.LEAVES));
+        var random = new SingleThreadedRandomSource(BAKE_SEED);
+        boolean forceSolid = state.is(BlockTags.LEAVES);
+
+        var renderTypes = model.getRenderTypes(state, random, ModelData.EMPTY);
+        if (renderTypes.isEmpty()) {
+            //The model declares no chunk layers at all, fall back to the block's registered layer with the vanilla quad list
+            var layer = ItemBlockRenderTypes.getChunkRenderType(state);
+            var vc = layer==RenderType.translucent()?this.translucentVC:this.opaqueVC;
+            for (Direction direction : BAKE_DIRECTIONS) {
+                random.setSeed(BAKE_SEED);//vanilla (ModelBlockRenderer) reseeds before every getQuads call
+                for (var quad : model.getQuads(state, direction, random)) {
+                    this.recordTint(quad);
+                    vc.quad(quad, layer, forceSolid);
+                }
+            }
+            return;
+        }
+
+        for (RenderType layer : renderTypes) {
+            var vc = layer==RenderType.translucent()?this.translucentVC:this.opaqueVC;
+            for (Direction direction : BAKE_DIRECTIONS) {
+                random.setSeed(BAKE_SEED);//vanilla (ModelBlockRenderer) reseeds before every getQuads call
+                for (var quad : model.getQuads(state, direction, random, ModelData.EMPTY, layer)) {
+                    this.recordTint(quad);
+                    vc.quad(quad, layer, forceSolid);
                 }
             }
         }
     }
 
+    private void recordTint(BakedQuad quad) {
+        if (quad.isTinted()) {
+            this.tintIndices.add(quad.getTintIndex());
+        }
+    }
+
+    //Sorted tint indices used by the quads of the last renderToOutput call, empty if the model has no tinted quads
+    public int[] getLastTintIndices() {
+        int[] indices = this.tintIndices.toIntArray();
+        Arrays.sort(indices);
+        return indices;
+    }
+
 
     private void bakeFluidState(BlockState state, int face) {
+        var fluidState = state.getFluidState();
+        //1.21.1: LiquidBlockRenderer.tesselate takes a single VertexConsumer and the fluid's chunk layer is a per fluid
+        // registration (ItemBlockRenderTypes.getRenderLayer) instead of the 26.2 per layer consumer callback
+        var layer = ItemBlockRenderTypes.getRenderLayer(fluidState);
+        ReuseVertexConsumer consumer;
+        if (layer == RenderType.translucent()) {
+            consumer = this.translucentVC;
+        } else {
+            if (layer == RenderType.cutout() || layer == RenderType.cutoutMipped()) {
+                this.opaqueVC.setDefaultMeta(this.opaqueVC.getDefaultMeta()|1);//set discard
+            } else {
+                this.opaqueVC.setDefaultMeta(this.opaqueVC.getDefaultMeta()&~1);//remove discard
+            }
+            consumer = this.opaqueVC;
+        }
+
         this.fr.tesselate(new BlockAndTintGetter() {
             @Override
+            public float getShade(Direction direction, boolean shade) {
+                return defaultShade(direction, shade);
+            }
+
+            @Override
             public LevelLightEngine getLightEngine() {
-                return LevelLightEngine.EMPTY;
+                return emptyLightEngine();
             }
 
             @Override
             public int getBrightness(LightLayer type, BlockPos pos) {
                 return 0;
-            }
-
-            @Override
-            public CardinalLighting cardinalLighting() {
-                return CardinalLighting.DEFAULT;
             }
 
             @Override
@@ -172,26 +256,55 @@ public class SoftwareModelTextureBakery {
             }
 
             @Override
-            public int getMinY() {
+            public int getMinBuildHeight() {
                 return 0;
             }
-        }, BlockPos.ZERO, layer->{
-            if (layer == ChunkSectionLayer.TRANSLUCENT) return this.translucentVC;
-            if (layer == ChunkSectionLayer.CUTOUT) {
-                this.opaqueVC.setDefaultMeta(this.opaqueVC.getDefaultMeta()|1);//set discard
-            } else {
-                this.opaqueVC.setDefaultMeta(this.opaqueVC.getDefaultMeta()&~1);//remove discard
-            }
-            return this.opaqueVC;
-        }, state, state.getFluidState());
+        }, BlockPos.ZERO, consumer, state, fluidState);
         this.translucentVC.setDefaultMeta(0);//Reset default meta
         this.opaqueVC.setDefaultMeta(0);//Reset default meta
     }
 
     private static boolean shouldReturnAirForFluid(BlockPos pos, int face) {
-        var fv = Direction.from3DDataValue(face).getUnitVec3i();
+        var fv = Direction.from3DDataValue(face).getNormal();
         int dot = fv.getX()*pos.getX() + fv.getY()*pos.getY() + fv.getZ()*pos.getZ();
         return dot >= 1;
+    }
+
+    //1.21.1: BlockAndTintGetter.getShade replaces the 26.2 CardinalLighting.DEFAULT, these are the
+    // ClientLevel.getShade values of a dimension without constant ambient light
+    public static float defaultShade(Direction direction, boolean shade) {
+        if (!shade) {
+            return 1.0f;
+        }
+        return switch (direction) {
+            case DOWN -> 0.5f;
+            case UP -> 1.0f;
+            case NORTH, SOUTH -> 0.8f;
+            case WEST, EAST -> 0.6f;
+        };
+    }
+
+    private static volatile LevelLightEngine EMPTY_LIGHT_ENGINE;
+    //1.21.1: there is no LevelLightEngine.EMPTY, an engine without block or sky layers behaves the same
+    // (dummy layer listeners and zero raw brightness)
+    public static LevelLightEngine emptyLightEngine() {
+        var engine = EMPTY_LIGHT_ENGINE;
+        if (engine == null) {
+            engine = new LevelLightEngine(new LightChunkGetter() {
+                @Nullable
+                @Override
+                public LightChunk getChunkForLighting(int chunkX, int chunkZ) {
+                    return null;
+                }
+
+                @Override
+                public EmptyBlockGetter getLevel() {
+                    return EmptyBlockGetter.INSTANCE;
+                }
+            }, false, false);
+            EMPTY_LIGHT_ENGINE = engine;
+        }
+        return engine;
     }
 
     public void free() {
@@ -209,6 +322,7 @@ public class SoftwareModelTextureBakery {
 
     public int renderToOutput(BlockState state, long outputBuffer, boolean rasterAsUV) {
         MemoryUtil.memSet(outputBuffer,0,16*16*8*6);
+        this.tintIndices.clear();
 
 
         boolean isBlock = true;

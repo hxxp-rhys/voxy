@@ -23,23 +23,48 @@ public class VoxyClientInstance extends VoxyInstance {
     private final Path basePath;
     private final boolean noIngestOverride;
 
+    //Java 21: upstream computes the storage config in a prologue that runs before super() (JEP 447 "flexible
+    // constructor bodies", Java 22+ preview / Java 25 final). Java 21 requires super() to be the first statement, so
+    // the prologue is hoisted into a static factory whose result is delegated through this(...). The VoxyInstance
+    // constructor calls shouldCreateInstance() before any field of this class is assigned, so the prepared state is
+    // handed to it through a thread local (instances are only ever created on the render thread via
+    // VoxyCommon.createInstance()).
+    private record PreparedState(Config config, Path basePath, boolean noIngestOverride) {}
+    private static final ThreadLocal<PreparedState> PREPARED = new ThreadLocal<>();
+
     public VoxyClientInstance() {
-        {
-            var path = FlashbackCompat.getReplayStoragePath();
-            this.noIngestOverride = path != null;
-            if (path == null) {
-                path = getBasePath();
-            }
-            var basePath = this.basePath = path.normalize();
-            this.config = StorageConfigUtil.getCreateStorageConfig(Config.class, c->c.version==1&&c.sectionStorageConfig!=null, ()->DEFAULT_STORAGE_CONFIG, basePath);
-        }
+        this(prepare());
+    }
+
+    private VoxyClientInstance(PreparedState state) {
         super();
+        PREPARED.remove();
+        this.config = state.config;
+        this.basePath = state.basePath;
+        this.noIngestOverride = state.noIngestOverride;
         this.updateDedicatedThreads();
+    }
+
+    private static PreparedState prepare() {
+        var path = FlashbackCompat.getReplayStoragePath();
+        boolean noIngestOverride = path != null;
+        if (path == null) {
+            path = getBasePath();
+        }
+        var basePath = path.normalize();
+        var config = StorageConfigUtil.getCreateStorageConfig(Config.class, c->c.version==1&&c.sectionStorageConfig!=null, ()->DEFAULT_STORAGE_CONFIG, basePath);
+        var state = new PreparedState(config, basePath, noIngestOverride);
+        PREPARED.set(state);
+        return state;
     }
 
     @Override
     protected boolean shouldCreateInstance() {
-        return !this.config.disabled;
+        //Called from the VoxyInstance constructor, i.e. before this.config is assigned
+        var state = PREPARED.get();
+        PREPARED.remove(); // consumed here so the thread-local never lingers when the ctor throws DontCreateInstance
+        var config = state != null ? state.config : this.config;
+        return config == null || !config.disabled;
     }
 
     @Override
@@ -113,6 +138,7 @@ public class VoxyClientInstance extends VoxyInstance {
                 Logger.error("Network handle null");
                 basePath = basePath.resolve("UNKNOWN");
             } else {
+                //MultiPlayerGameMode.connection is private on 1.21.1, opened by the access transformer
                 var info = netHandle.connection.getServerData();
                 if (info == null) {
                     Logger.error("Server info null");

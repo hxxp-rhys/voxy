@@ -9,6 +9,7 @@ import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.world.level.Level;
 import org.jetbrains.annotations.Nullable;
@@ -20,6 +21,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.Objects;
 
+/**
+ * 1.21.1 (contract C4): there is no {@code LevelExtractor} on this version, {@code LevelRenderer} itself owns the level
+ * (ref LevelRenderer.java:683 setLevel, :716 allChanged, :488 close), so the injections that dev split between
+ * {@code MixinLevelExtractor} and this mixin all live here (same shape as upstream 12111 MixinLevelRenderer).
+ */
 @Mixin(LevelRenderer.class)
 public abstract class MixinLevelRenderer implements IVoxyRenderSystemHolder {
     @Unique @Nullable private WorldIdentifier identifier;
@@ -30,7 +36,23 @@ public abstract class MixinLevelRenderer implements IVoxyRenderSystemHolder {
         return this.renderer;
     }
 
-    @Inject(method = "close", at = @At("HEAD"))
+    // ref LevelRenderer.java:683 public void setLevel(@Nullable ClientLevel level); vanilla calls allChanged() itself
+    // when the level is not null (LevelRenderer.java:690), which (re)creates the renderer below
+    @Inject(method = "setLevel(Lnet/minecraft/client/multiplayer/ClientLevel;)V", at = @At("HEAD"))
+    private void voxy$onSetLevel(@Nullable ClientLevel level, CallbackInfo ci) {
+        this.voxy$setWorld(level);
+    }
+
+    // ref LevelRenderer.java:716 public void allChanged(); RETURN with order 900 so this runs before Sodium's
+    // (default order 1000) allChanged injection, mirroring upstream 12111 ("We want to inject before sodium")
+    @Inject(method = "allChanged()V", at = @At("RETURN"), order = 900)
+    private void voxy$reload(CallbackInfo ci) {
+        this.voxy$shutdownRenderer();
+        this.voxy$createRenderer();
+    }
+
+    // ref LevelRenderer.java:488 public void close()
+    @Inject(method = "close()V", at = @At("HEAD"))
     private void voxy$injectClose(CallbackInfo ci) {
         this.voxy$shutdownRenderer();
     }

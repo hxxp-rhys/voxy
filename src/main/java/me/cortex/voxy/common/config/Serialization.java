@@ -5,8 +5,8 @@ import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
 import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.commonImpl.PlatformUtil;
 import me.cortex.voxy.commonImpl.VoxyCommon;
-import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -90,15 +90,43 @@ public class Serialization {
         }
     }
 
+    //Safety net (1.21.1/NeoForge): the classes that must be registered for a voxy storage config to round-trip.
+    // The dynamic scan below normally finds all of these (plus anything new); this list only guarantees that a
+    // loader/packaging quirk (e.g. a jar-in-jar filesystem that cannot be listed) can never leave GSON with zero
+    // registered config types, which would silently break every existing save's config.json.
+    private static final String[] KNOWN_CONFIG_CLASSES = {
+            "me.cortex.voxy.common.config.compressors.LZ4Compressor$Config",
+            "me.cortex.voxy.common.config.compressors.ZSTDCompressor$Config",
+            "me.cortex.voxy.common.config.storage.lmdb.LMDBStorageBackend$Config",
+            "me.cortex.voxy.common.config.storage.inmemory.MemoryStorageBackend$Config",
+            "me.cortex.voxy.common.config.storage.redis.RedisStorageBackend$Config",
+            "me.cortex.voxy.common.config.storage.rocksdb.RocksDBStorageBackend$Config",
+            "me.cortex.voxy.common.config.storage.other.ReadonlyCachingLayer$Config",
+            "me.cortex.voxy.common.config.storage.other.CompressionStorageAdaptor$Config",
+            "me.cortex.voxy.common.config.storage.other.ConditionalStorageBackendConfig",
+            "me.cortex.voxy.common.config.storage.other.FragmentedStorageBackendAdaptor$Config",
+            "me.cortex.voxy.common.config.storage.other.FragmentedStorageBackendAdaptor$Config2",
+            "me.cortex.voxy.common.config.storage.other.BasicPathInsertionConfig",
+            "me.cortex.voxy.common.config.section.SectionSerializationStorage$Config",
+    };
+
     public static void init() {
         String BASE_SEARCH_PACKAGE = "me.cortex.voxy";
 
         Map<Class<?>, GsonConfigSerialization<?>> serializers = new HashMap<>();
 
         Set<String> clazzs = new LinkedHashSet<>();
-        var path = FabricLoader.getInstance().getModContainer("voxy").get().getRootPaths().get(0);
-        clazzs.addAll(collectAllClasses(path, BASE_SEARCH_PACKAGE));
+        //1.21.1/NeoForge: FabricLoader.getModContainer("voxy").getRootPaths() -> PlatformUtil.modRootPaths. The
+        // NeoForge SecureJar root path is a union-filesystem path for both a production jar and a dev classes
+        // directory, so the same directory walk covers both.
+        for (var path : PlatformUtil.modRootPaths(PlatformUtil.MOD_ID)) {
+            clazzs.addAll(collectAllClasses(path, BASE_SEARCH_PACKAGE));
+        }
         clazzs.addAll(collectAllClasses(BASE_SEARCH_PACKAGE));
+        if (clazzs.isEmpty()) {
+            Logger.warn("Class scan found no voxy classes, falling back to the known config class list");
+            clazzs.addAll(Arrays.asList(KNOWN_CONFIG_CLASSES));
+        }
         int count = 0;
         outer:
         for (var clzName : clazzs) {
@@ -116,6 +144,9 @@ public class Serialization {
             }
             if (clzName.contains("VoxyConfigScreenPages")) {
                 continue;//Dont want to modmenu incase it doesnt exist
+            }
+            if (clzName.contains("VoxyConfigScreenFactory")) {
+                continue;//NeoForge config screen factory references the mod list gui, dont load it this early
             }
             if (clzName.endsWith("VoxyConfig")) {
                 continue;//Special case to prevent recursive loading pain
@@ -189,21 +220,26 @@ public class Serialization {
         }
     }
     private static List<String> collectAllClasses(Path base, String pack) {
-        if (!Files.exists(base.resolve(pack.replaceAll("[.]", "/")))) {
-            return List.of();
-        }
         try {
-            return Files.list(base.resolve(pack.replaceAll("[.]", "/"))).flatMap(inner -> {
-                if (inner.getFileName().toString().endsWith(".class")) {
-                    return Stream.of(pack + "." + inner.getFileName().toString().replace(".class", ""));
-                } else if (Files.isDirectory(inner)) {
-                    return collectAllClasses(base, pack + "." + inner.getFileName()).stream();
-                } else {
-                    return Stream.of();
-                }
-            }).collect(Collectors.toList());
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+            var dir = base.resolve(pack.replaceAll("[.]", "/"));
+            if (!Files.exists(dir)) {
+                return List.of();
+            }
+            try (var listing = Files.list(dir)) {
+                return listing.flatMap(inner -> {
+                    if (inner.getFileName().toString().endsWith(".class")) {
+                        return Stream.of(pack + "." + inner.getFileName().toString().replace(".class", ""));
+                    } else if (Files.isDirectory(inner)) {
+                        return collectAllClasses(base, pack + "." + inner.getFileName()).stream();
+                    } else {
+                        return Stream.of();
+                    }
+                }).collect(Collectors.toList());
+            }
+        } catch (Exception e) {
+            //1.21.1: never let a filesystem provider quirk (union fs, jar-in-jar) abort config serialization setup
+            Logger.error("Failed to collect classes in package: " + pack + " from " + base, e);
+            return List.of();
         }
     }
 }

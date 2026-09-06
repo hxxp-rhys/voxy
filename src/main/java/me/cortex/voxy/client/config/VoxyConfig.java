@@ -8,8 +8,8 @@ import me.cortex.voxy.client.core.NormalRenderPipeline;
 import me.cortex.voxy.client.core.SSAO;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.cpu.CpuLayout;
+import me.cortex.voxy.commonImpl.PlatformUtil;
 import me.cortex.voxy.commonImpl.VoxyCommon;
-import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.FileReader;
 import java.io.IOException;
@@ -18,6 +18,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
 
+/**
+ * voxy-config.json (Gson). This is THE config on NeoForge too (brief contract C17): no TOML config exists.
+ *
+ * Server safety (brief contract C11): voxyworldgenv2 reflects this class on a dedicated server (initialising
+ * Class.forName + {@link #isEnabled()}), so the static initialiser must not touch client classes or LWJGL
+ * ({@link CpuLayout} is Throwable-safe) and {@link #save()} must be a no-op when voxy is unavailable. The
+ * {@code NormalRenderPipeline.FogMode}/{@code SSAO.SSAOMode} references only appear in method bodies/signatures
+ * and are resolved lazily by the JVM, never during class initialisation.
+ */
 public class VoxyConfig {
     private static final Gson GSON = new GsonBuilder()
             .setFieldNamingPolicy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES)
@@ -36,6 +45,30 @@ public class VoxyConfig {
     public String fogMode;
     public boolean dontUseSodiumBuilderThreads = false;
     public String ssaoMode;
+
+    //RMN LOD resync (brief contract C13; exact field names used by client.LodResyncVerifier / LodResyncClient).
+    // Verifies the local LOD database ring-by-ring outward from the player and re-requests cells lost to
+    // voxyworldgenv2's fire-and-forget sends (see commonImpl.network.LodResyncPayloads). Requires voxy on the server.
+    public boolean lodResyncEnabled = true;
+    /**
+     * Hard cap on the verified radius, in CHUNKS, regardless of what the server announces. voxyworldgenv2's wire
+     * format sends full-resolution chunk sections at every distance, so cost scales with area (~1.6 GB to 256).
+     */
+    public int lodResyncMaxRadiusChunks = 256;
+    /**
+     * Re-request attempts per 32x32 cell before the cell is written off as a genuinely empty column. The server
+     * drains a fixed budget per tick and silently drops anything past its queue cap while the client counts an
+     * attempt on SEND, so a low cap abandons cells whose requests the server simply discarded.
+     */
+    public int lodResyncMaxAttempts = 5;
+    /**
+     * How long (ms) a cell must be continuously absent from the local LOD database before it is treated as a real
+     * hole and re-requested; covers the asynchronous save delay after ingest. 0 disables the delay.
+     */
+    public long lodResyncGraceMs = 15000L;
+    // NB: the server-side re-serve budget deliberately does NOT live here. On a dedicated server
+    // VoxyCommon.isAvailable() is false, so this file is never read or written there; it lives in
+    // config/voxy-lod-resync.json (commonImpl.network.LodResyncConfig) instead.
 
     public SSAO.SSAOMode getSSAOMode() {
         var DEFAULT = SSAO.SSAOMode.AUTO;
@@ -95,6 +128,15 @@ public class VoxyConfig {
         }
     }
 
+    /**
+     * Static probe used by third-party integrations (brief contract C11/C12): voxyworldgenv2's VoxyIntegration
+     * reflects {@code VoxyConfig.isEnabled()}. Semantics match voxyworldgenv2's own convention ("no usable voxy =>
+     * keep generating"): true on a dedicated server / unsupported GL (voxy unavailable), otherwise the user's toggle.
+     */
+    public static boolean isEnabled() {
+        return !VoxyCommon.isAvailable() || (CONFIG != null && CONFIG.enabled);
+    }
+
     public void save() {
         if (!VoxyCommon.isAvailable()) {
             Logger.info("Not saving config since voxy is unavalible");
@@ -109,8 +151,8 @@ public class VoxyConfig {
     }
 
     private static Path getConfigPath() {
-        return FabricLoader.getInstance()
-                .getConfigDir()
+        //1.21.1: FabricLoader.getConfigDir() -> FMLPaths.CONFIGDIR (through the loader shim)
+        return PlatformUtil.configDir()
                 .resolve("voxy-config.json");
     }
 

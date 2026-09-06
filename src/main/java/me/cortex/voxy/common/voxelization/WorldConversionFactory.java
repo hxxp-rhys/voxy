@@ -2,8 +2,8 @@ package me.cortex.voxy.common.voxelization;
 
 import it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap;
 import me.cortex.voxy.common.world.other.Mapper;
+import me.cortex.voxy.commonImpl.PlatformUtil;
 import net.caffeinemc.mods.lithium.common.world.chunk.LithiumHashPalette;
-import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.core.Holder;
 import net.minecraft.util.SimpleBitStorage;
 import net.minecraft.util.ZeroBitStorage;
@@ -14,7 +14,12 @@ import net.minecraft.world.level.chunk.*;
 import java.util.WeakHashMap;
 
 public class WorldConversionFactory {
-    private static final boolean LITHIUM_INSTALLED = FabricLoader.getInstance().isModLoaded("lithium");
+    // 1.21.1: FabricLoader.isModLoaded -> PlatformUtil.isModLoaded (ModList with LoadingModList fallback, safe in <clinit>
+    // on both dists). The Lithium class name is unchanged in lithium-neoforge-0.15.4+mc1.21.1.jar (present in both the
+    // client and the dedicated-server mods folders): net/caffeinemc/mods/lithium/common/world/chunk/LithiumHashPalette.class.
+    // The instanceof in setupLithiumLocalPallet is only resolved when that method runs (guarded by LITHIUM_INSTALLED),
+    // so this class loads fine when Lithium is absent.
+    private static final boolean LITHIUM_INSTALLED = PlatformUtil.isModLoaded("lithium");
 
     private static final class Cache {
         private final int[] biomeCache = new int[4*4*4];
@@ -129,12 +134,16 @@ public class WorldConversionFactory {
         var data = section.section;
         var zoomCells = cache.zoomCellCache;
 
-        var vp = blockContainer.data.palette;
+        // 1.21.1: PalettedContainer.data is a private volatile Data<T> RECORD (configuration, storage, palette) opened via
+        // accesstransformer.cfg. It is swapped atomically on palette resize, so take ONE snapshot and derive both the
+        // palette and the storage from it (reading the field twice could pair a new palette with old storage).
+        var containerData = blockContainer.data;
+        Palette<BlockState> vp = containerData.palette();
         var pc = cache.getPaletteCache(vp.getSize());
         GlobalPalette<BlockState> bps = null;
 
         int pcc = 0;
-        if (blockContainer.data.palette instanceof GlobalPalette<BlockState> _bps) {
+        if (vp instanceof GlobalPalette<BlockState> _bps) {
             bps = _bps;
             pcc = bps.getSize();
         } else {
@@ -163,7 +172,8 @@ public class WorldConversionFactory {
 
 
         int nonZeroCnt = 0;
-        if (blockContainer.data.storage instanceof SimpleBitStorage bStor) {
+        var storage = containerData.storage();
+        if (storage instanceof SimpleBitStorage bStor) {
             var bDat = bStor.getRaw();
             int iterPerLong = (64 / bStor.getBits()) - 1;
 
@@ -191,7 +201,7 @@ public class WorldConversionFactory {
                 data[i] = Mapper.composeMappingId(light, bId, biomes[Integer.compress(i,0b1100_1100_1100)]);
             }
         } else {
-            if (!(blockContainer.data.storage instanceof ZeroBitStorage)) {
+            if (!(storage instanceof ZeroBitStorage)) {
                 throw new IllegalStateException();
             }
             int bId = pc[0];

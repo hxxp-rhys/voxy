@@ -40,7 +40,11 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
         }
     }
 
-    @Inject(method = "beginLevelRendering", at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/opengl/GlStateManager;_activeTexture(I)V", shift = At.Shift.BEFORE), remap = false)
+    // 1.21.1: com.mojang.blaze3d.opengl does not exist (GlStateManager lives in com.mojang.blaze3d.platform) and Iris 1.8.14's
+    // beginLevelRendering never calls GlStateManager directly: the "make sure we're using texture unit 0" call is
+    // RenderSystem.activeTexture(GL_TEXTURE0) (IrisRenderingPipeline.java:859, the only such invoke in the method), so that
+    // is the injection point. It runs right after RenderSystem.clear in LevelRenderer.renderLevel (iris MixinLevelRenderer).
+    @Inject(method = "beginLevelRendering", at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/systems/RenderSystem;activeTexture(I)V", shift = At.Shift.BEFORE), remap = false)
     private void voxy$injectViewportSetup(CallbackInfo ci) {
         if (IrisUtil.CAPTURED_VIEWPORT_PARAMETERS != null) {
             var renderer = IVoxyRenderSystemHolder.getNullable();

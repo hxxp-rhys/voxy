@@ -22,6 +22,12 @@ import org.jetbrains.annotations.NotNull;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
 public class VoxelIngestService {
+    //Compatibility: voxyworldgenv2 (VoxyIntegration.initialize) reflectively reads a static "INSTANCE" field of this
+    // class and binds it to the ingest method if that method is not static. The ingest entry points it probes
+    // (tryAutoIngestChunk(LevelChunk), rawIngest(WorldIdentifier, ...)) are static so the field is only informative:
+    // it tracks the ingest service of the current VoxyInstance (null when no instance is running).
+    public static volatile VoxelIngestService INSTANCE;
+
     private static final ThreadLocal<VoxelizedSection> SECTION_CACHE = ThreadLocal.withInitial(VoxelizedSection::createEmpty);
     private final Service service;
     private record IngestSection(int cx, int cy, int cz, WorldEngine world, LevelChunkSection section, DataLayer blockLight, DataLayer skyLight){}
@@ -29,6 +35,7 @@ public class VoxelIngestService {
 
     public VoxelIngestService(ServiceManager pool) {
         this.service = pool.createServiceNoCleanup(()->this::processJob, 5000, "Ingest service");
+        INSTANCE = this;
     }
 
     private void processJob() {
@@ -104,11 +111,11 @@ public class VoxelIngestService {
         var lightingProvider = chunk.getLevel().getLightEngine();
         boolean gotLighting = false;
 
-        int i = chunk.getMinSectionY() - 1;
+        int i = chunk.getMinSection() - 1;
         boolean allEmpty = true;
         for (var section : chunk.getSections()) {
             i++;
-            if (section == null || !shouldIngestSection(section, chunk.getPos().x(), i, chunk.getPos().z())) continue;
+            if (section == null || !shouldIngestSection(section, chunk.getPos().x, i, chunk.getPos().z)) continue;
             allEmpty&=section.hasOnlyAir();
             //if (section.isEmpty()) continue;
             var pos = SectionPos.of(chunk.getPos(), i);
@@ -119,12 +126,12 @@ public class VoxelIngestService {
 
         if (allEmpty&&!gotLighting) {
             //Special case all empty chunk columns, we need to clear it out
-            i = chunk.getMinSectionY() - 1;
+            i = chunk.getMinSection() - 1;
             for (var section : chunk.getSections()) {
                 i++;
-                if (section == null || !shouldIngestSection(section, chunk.getPos().x(), i, chunk.getPos().z())) continue;
+                if (section == null || !shouldIngestSection(section, chunk.getPos().x, i, chunk.getPos().z)) continue;
                 engine.acquireRef();
-                this.ingestQueue.add(new IngestSection(chunk.getPos().x(), i, chunk.getPos().z(), engine, section, null, null));
+                this.ingestQueue.add(new IngestSection(chunk.getPos().x, i, chunk.getPos().z, engine, section, null, null));
                 try {
                     this.service.execute();
                 } catch (Exception e) {
@@ -143,10 +150,10 @@ public class VoxelIngestService {
         var slp = lightingProvider.getLayerListener(LightLayer.SKY);
 
 
-        i = chunk.getMinSectionY() - 1;
+        i = chunk.getMinSection() - 1;
         for (var section : chunk.getSections()) {
             i++;
-            if (section == null || !shouldIngestSection(section, chunk.getPos().x(), i, chunk.getPos().z())) continue;
+            if (section == null || !shouldIngestSection(section, chunk.getPos().x, i, chunk.getPos().z)) continue;
             //if (section.isEmpty()) continue;
             var pos = SectionPos.of(chunk.getPos(), i);
 
@@ -165,7 +172,7 @@ public class VoxelIngestService {
             //    continue;
             //}
             engine.acquireRef();//This is not great but dont really have a better solution as all the others have there own problem
-            this.ingestQueue.add(new IngestSection(chunk.getPos().x(), i, chunk.getPos().z(), engine, section, bl, sl));//TODO: fixme, this is technically not safe todo on the chunk load ingest, we need to copy the section data so it cant be modified while being read
+            this.ingestQueue.add(new IngestSection(chunk.getPos().x, i, chunk.getPos().z, engine, section, bl, sl));//TODO: fixme, this is technically not safe todo on the chunk load ingest, we need to copy the section data so it cant be modified while being read
             try {
                 this.service.execute();
             } catch (Exception e) {
@@ -182,6 +189,9 @@ public class VoxelIngestService {
     }
 
     public void shutdown() {
+        if (INSTANCE == this) {
+            INSTANCE = null;
+        }
         this.service.shutdown();
         while (!this.ingestQueue.isEmpty()) {
             //We need to manually release all our world locks

@@ -54,6 +54,18 @@ public class RedisStorageBackend extends StorageBackend {
     }
 
     @Override
+    public boolean sectionExists(long key) {
+        try (var jedis = this.pool.getResource()) {
+            if (this.user != null) {
+                jedis.auth(this.user, this.password);
+            }
+
+            //HEXISTS: key-only, no value transfer over the wire
+            return jedis.hexists(WORLD, longToBytes(key));
+        }
+    }
+
+    @Override
     public void setSectionData(long key, MemoryBuffer data) {
         try (var jedis = this.pool.getResource()) {
             if (this.user != null) {

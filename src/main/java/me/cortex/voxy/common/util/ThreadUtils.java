@@ -5,37 +5,58 @@ import org.lwjgl.system.*;
 import org.lwjgl.system.windows.Kernel32;
 
 //Platform specific code to assist in thread utilities
+//LWJGL 3.3.3 (Minecraft 1.21.1): every call used here (Platform.get, SharedLibrary.getFunctionAddress,
+// JNI.invokePPCI/invokePPI/callPI, MemoryStack.ncalloc, APIUtil.apiCreateLibrary/apiGetFunctionAddress) exists
+// with the same signature as on 3.4 (verified with javap against lwjgl-3.3.3.jar).
 public class ThreadUtils {
     public static final int WIN32_THREAD_PRIORITY_TIME_CRITICAL = 15;
     public static final int WIN32_THREAD_PRIORITY_LOWEST = -2;
     public static final int WIN32_THREAD_MODE_BACKGROUND_BEGIN = 0x00010000;
     public static final int WIN32_THREAD_MODE_BACKGROUND_END = 0x00020000;
-    public static final boolean isWindows = Platform.get() == Platform.WINDOWS;
-    public static final boolean isLinux = Platform.get() == Platform.LINUX;
+    public static final boolean isWindows;
+    public static final boolean isLinux;
     private static final long SetThreadPriority;
     private static final long SetThreadSelectedCpuSetMasks;
     private static final long schedSetaffinity;
     static {
-        if (isWindows) {
-            SetThreadPriority = Kernel32.getLibrary().getFunctionAddress("SetThreadPriority");
-            SetThreadSelectedCpuSetMasks = Kernel32.getLibrary().getFunctionAddress("SetThreadSelectedCpuSetMasks");
-        } else {
-            SetThreadPriority = 0;
-            SetThreadSelectedCpuSetMasks = 0;
+        //Server-safety (brief contract C11): LWJGL core is absent on a production dedicated server, so resolving
+        // org.lwjgl.system.Platform throws NoClassDefFoundError. Fail soft: every native helper then reports
+        // "unsupported" (false) instead of killing the caller's class initialisation.
+        boolean windows = false;
+        boolean linux = false;
+        try {
+            var platform = Platform.get();
+            windows = platform == Platform.WINDOWS;
+            linux = platform == Platform.LINUX;
+        } catch (Throwable t) {
+            Logger.info("LWJGL platform detection unavailable (" + t.getClass().getSimpleName() + "), native thread utilities disabled");
         }
+        isWindows = windows;
+        isLinux = linux;
 
-        if (Platform.get() == Platform.LINUX) {
-            long fn = 0;
+        long setThreadPriority = 0;
+        long setThreadSelectedCpuSetMasks = 0;
+        if (isWindows) {
+            try {
+                setThreadPriority = Kernel32.getLibrary().getFunctionAddress("SetThreadPriority");
+                setThreadSelectedCpuSetMasks = Kernel32.getLibrary().getFunctionAddress("SetThreadSelectedCpuSetMasks");
+            } catch (Throwable t) {
+                Logger.error(t);
+            }
+        }
+        SetThreadPriority = setThreadPriority;
+        SetThreadSelectedCpuSetMasks = setThreadSelectedCpuSetMasks;
+
+        long fn = 0;
+        if (isLinux) {
             try {
                 var libc = APIUtil.apiCreateLibrary("libc.so.6");
                 fn = APIUtil.apiGetFunctionAddress(libc, "sched_setaffinity");
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 Logger.error(e);
             }
-            schedSetaffinity = fn;
-        } else {
-            schedSetaffinity = 0;
         }
+        schedSetaffinity = fn;
     }
 
     public static boolean SetThreadSelectedCpuSetMasksWin32(long mask) {

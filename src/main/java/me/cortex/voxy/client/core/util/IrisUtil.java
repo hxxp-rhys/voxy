@@ -2,9 +2,9 @@ package me.cortex.voxy.client.core.util;
 
 import me.cortex.voxy.client.core.VoxyRenderSystem;
 import me.cortex.voxy.client.core.rendering.Viewport;
+import me.cortex.voxy.client.core.rendering.util.VoxyFogParameters;
+import me.cortex.voxy.commonImpl.PlatformUtil;
 import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;
-import net.caffeinemc.mods.sodium.client.util.FogParameters;
-import net.fabricmc.loader.api.FabricLoader;
 import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.api.v0.IrisApi;
 import net.irisshaders.iris.gl.IrisRenderSystem;
@@ -14,7 +14,8 @@ import java.io.IOException;
 
 public class IrisUtil {
 
-    public record CapturedViewportParameters(ChunkRenderMatrices matrices, FogParameters parameters, int width, int height, double x, double y, double z) {
+    // 1.21.1: Sodium 0.8.13 has no FogParameters class, the fog is carried by Voxy's own VoxyFogParameters (contract C1)
+    public record CapturedViewportParameters(ChunkRenderMatrices matrices, VoxyFogParameters parameters, int width, int height, double x, double y, double z) {
         public Viewport<?> apply(VoxyRenderSystem vrs) {
             return vrs.setupViewport(this.matrices.projection(), this.matrices.modelView(), this.parameters, this.width, this.height, this.x, this.y, this.z);
         }
@@ -23,7 +24,10 @@ public class IrisUtil {
     public static boolean USED_IRIS_VIEWPORT;
     public static CapturedViewportParameters CAPTURED_VIEWPORT_PARAMETERS;
 
-    public static final boolean IRIS_INSTALLED = FabricLoader.getInstance().isModLoaded("iris");
+    // 1.21.1: NeoForge has no FabricLoader, mod presence goes through the shared platform helper (contract C9).
+    // Every call that actually touches an Iris class lives in a private *0 method so that net.irisshaders.* is never
+    // resolved unless Iris is genuinely present.
+    public static final boolean IRIS_INSTALLED = PlatformUtil.isModLoaded("iris");
     public static final boolean SHADER_SUPPORT = true;//System.getProperty("voxy.enableExperimentalIrisPipeline", "false").equalsIgnoreCase("true");
 
 

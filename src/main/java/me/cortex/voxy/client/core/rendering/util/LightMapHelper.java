@@ -1,5 +1,6 @@
 package me.cortex.voxy.client.core.rendering.util;
 
+import me.cortex.voxy.client.mixin.minecraft.AccessorLightTexture;
 import net.minecraft.client.Minecraft;
 
 import static org.lwjgl.opengl.GL11C.*;
@@ -27,6 +28,9 @@ public class LightMapHelper {
     }
 
     public static int getLightmapTextureId() {
-        return ((com.mojang.blaze3d.opengl.GlTexture)(Minecraft.getInstance().gameRenderer.levelLightmap().texture())).glId();
+        // 1.21.1 (contract C18): no GameRenderer.levelLightmap()/GpuTexture, the light map is the private
+        // DynamicTexture LightTexture.lightTexture (ref LightTexture.java:23) reached through GameRenderer.lightTexture()
+        // (ref GameRenderer.java:1390) + an accessor mixin; the GL id is AbstractTexture.getId() (ref AbstractTexture.java:57)
+        return ((AccessorLightTexture) Minecraft.getInstance().gameRenderer.lightTexture()).voxy$getLightTexture().getId();
     }
 }

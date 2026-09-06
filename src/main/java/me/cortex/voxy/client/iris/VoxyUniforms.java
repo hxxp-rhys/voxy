@@ -18,7 +18,11 @@ public class VoxyUniforms {
         if (vrs == null) {
             return new Matrix4f();
         }
-        return new Matrix4f(vrs.getViewport().MVP);
+        var viewport = vrs.getViewport();
+        if (viewport == null) {//VoxyRenderSystem.getViewport() is null while the iris shadow pass is active
+            return new Matrix4f();
+        }
+        return new Matrix4f(viewport.MVP);
     }
 
     public static Matrix4f getModelView() {//This is 1 frame late ;-; cries, since the update occurs _before_ the voxy render pipeline
@@ -26,7 +30,11 @@ public class VoxyUniforms {
         if (vrs == null) {
             return new Matrix4f();
         }
-        return new Matrix4f(vrs.getViewport().modelView);
+        var viewport = vrs.getViewport();
+        if (viewport == null) {//VoxyRenderSystem.getViewport() is null while the iris shadow pass is active
+            return new Matrix4f();
+        }
+        return new Matrix4f(viewport.modelView);
     }
 
     public static Matrix4f getProjection() {//This is 1 frame late ;-; cries, since the update occurs _before_ the voxy render pipeline
@@ -34,7 +42,11 @@ public class VoxyUniforms {
         if (vrs == null) {
             return new Matrix4f();
         }
-        var mat = vrs.getViewport().projection;
+        var viewport = vrs.getViewport();
+        if (viewport == null) {//VoxyRenderSystem.getViewport() is null while the iris shadow pass is active
+            return new Matrix4f();
+        }
+        var mat = viewport.projection;
         if (mat == null) {
             return new Matrix4f();
         }

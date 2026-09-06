@@ -105,6 +105,18 @@ public class LMDBStorageBackend extends StorageBackend {
         }));
     }
 
+    @Override
+    public boolean sectionExists(long key) {
+        // Key-only lookup: mdb_get returns a pointer into the map, so this skips the memcpy of
+        // the value into the scratch buffer that getSectionData does. Used by the LOD resync
+        // verifier, which probes thousands of section keys per second and never reads the payload.
+        return this.synchronizedTransaction(() -> this.sectionDatabase.transaction(MDB_RDONLY, transaction->{
+            var buff = transaction.stack.malloc(8);
+            buff.putLong(0, key);
+            return transaction.get(buff) != null;
+        }));
+    }
+
     //TODO: pad data to like some alignemnt so that when the section gets saved or updated
     // it can use the same allocation
     public void setSectionData(long key, MemoryBuffer data) {

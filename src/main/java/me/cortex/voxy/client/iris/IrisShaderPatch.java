@@ -308,12 +308,15 @@ public class IrisShaderPatch {
 
     private static final Gson GSON = new GsonBuilder()
             .excludeFieldsWithModifiers(Modifier.PRIVATE)
-            .setStrictness(Strictness.LENIENT)
+            // 1.21.1: Minecraft ships Gson 2.10.1 which predates com.google.gson.Strictness (Gson 2.11+),
+            // GsonBuilder.setLenient() is the equivalent on this version
+            .setLenient()
             .create();
 
     public static IrisShaderPatch makePatch(ShaderPack ipack, AbsolutePackPath directory, Function<AbsolutePackPath, String> sourceProvider) {
         String voxyPatchData = sourceProvider.apply(directory.resolve("voxy.json"));
         if (voxyPatchData == null) {//No voxy patch data in shaderpack
+            Logger.info("Shaderpack has no voxy.json - Voxy LODs will render through the normal (non-shader) pipeline for this pack");
             return null;
         }
 

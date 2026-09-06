@@ -1,40 +1,20 @@
 package me.cortex.voxy.client.compat;
 
-import com.moulberry.flashback.Flashback;
-import com.moulberry.flashback.playback.ReplayServer;
-import com.moulberry.flashback.record.FlashbackMeta;
-import me.cortex.voxy.common.Logger;
-import net.fabricmc.loader.api.FabricLoader;
-
 import java.nio.file.Path;
 
+/**
+ * Flashback replay integration.
+ *
+ * 1.21.1/NeoForge (brief contract C16): Flashback is a Fabric-only mod with no NeoForge 1.21.1 build on the user's
+ * client, so the mixins that stored voxy's storage path in the replay metadata ({@code mixin/flashback/*}) and the
+ * {@code IFlashbackMeta} duck interface are removed. The API surface used by {@code VoxyClientInstance} is kept:
+ * {@link #getReplayStoragePath()} always returns null, which means "use the normal per-server storage path and keep
+ * ingest enabled", exactly what upstream does when Flashback is not installed.
+ */
 public class FlashbackCompat {
-    public static final boolean FLASHBACK_INSTALLED = FabricLoader.getInstance().isModLoaded("flashback");
+    public static final boolean FLASHBACK_INSTALLED = false;
 
     public static Path getReplayStoragePath() {
-        if (!FLASHBACK_INSTALLED) {
-            return null;
-        }
-        return getReplayStoragePath0();
-    }
-
-    private static Path getReplayStoragePath0() {
-        ReplayServer replayServer = Flashback.getReplayServer();
-        if (replayServer != null) {
-            FlashbackMeta meta = replayServer.getMetadata();
-            if (meta != null) {
-                var path = ((IFlashbackMeta)meta).getVoxyPath();
-                if (path != null) {
-                    Logger.info("Flashback replay server exists and meta exists");
-                    if (path.exists()) {
-                        Logger.info("Flashback voxy path exists in filesystem, using this as lod data source");
-                        return path.toPath();
-                    } else {
-                        Logger.warn("Flashback meta had voxy path saved but path doesnt exist");
-                    }
-                }
-            }
-        }
         return null;
     }
 }

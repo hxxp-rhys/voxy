@@ -1,0 +1,13 @@
+{
+  "required": false,
+  "package": "me.cortex.voxy.client.mixin.worldgen",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "me.cortex.voxy.client.compat.VoxyWorldgenMixinPlugin",
+  "client": [
+    "MixinWorldgenClientQueue"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  },
+  "minVersion": "0.8"
+}

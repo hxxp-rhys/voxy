@@ -25,6 +25,12 @@ public class CompressionStorageAdaptor extends DelegatingStorageAdaptor {
         return this.compressor.decompress(data);
     }
 
+    //Presence of the compressed record == presence of the section; no decompression needed
+    @Override
+    public boolean sectionExists(long key) {
+        return this.delegate.sectionExists(key);
+    }
+
     @Override
     public void setSectionData(long key, MemoryBuffer data) {
         var cdata = this.compressor.compress(data);

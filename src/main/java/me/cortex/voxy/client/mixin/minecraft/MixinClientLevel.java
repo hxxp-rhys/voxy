@@ -7,11 +7,12 @@ import me.cortex.voxy.commonImpl.WorldIdentifier;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.client.renderer.extract.LevelExtractor;
+import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.SectionPos;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.state.BlockState;
@@ -24,6 +25,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+import java.util.function.Supplier;
+
 @Mixin(ClientLevel.class)
 public abstract class MixinClientLevel {
 
@@ -32,6 +35,9 @@ public abstract class MixinClientLevel {
 
     @Shadow public abstract ClientChunkCache getChunkSource();
 
+    // 1.21.1: ClientLevel(ClientPacketListener, ClientLevelData, ResourceKey<Level>, Holder<DimensionType>,
+    //                      int viewDistance, int serverSimulationDistance, Supplier<ProfilerFiller>, LevelRenderer,
+    //                      boolean isDebug, long biomeZoomSeed) - there is no LevelExtractor and no seaLevel parameter
     @Inject(method = "<init>", at = @At("TAIL"))
     private void voxy$getBottom(
             final ClientPacketListener connection,
@@ -40,12 +46,13 @@ public abstract class MixinClientLevel {
             final Holder<DimensionType> dimensionType,
             final int serverChunkRadius,
             final int serverSimulationDistance,
-            final LevelExtractor levelExtractor,
+            final Supplier<ProfilerFiller> profiler,
+            final LevelRenderer levelRenderer,
             final boolean isDebug,
             final long biomeZoomSeed,
-            final int seaLevel,
             CallbackInfo cir) {
-        this.bottomSectionY = ((Level)(Object)this).getMinY()>>4;
+        // 1.21.1: getMinY() -> getMinBuildHeight()
+        this.bottomSectionY = ((Level)(Object)this).getMinBuildHeight()>>4;
     }
 
     @Inject(method = "setBlocksDirty", at = @At("TAIL"))

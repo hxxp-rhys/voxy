@@ -29,6 +29,12 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
 
     private final SSAO ssao;
 
+    /**
+     * 1.21.1 note (see VoxyFogEvents for the full mapping): vanilla 1.21.1 only has the terrain fog wall
+     * ("render distance fog", always pushed away) and thick/effect fogs ("environmental fog", pushed away for
+     * removesVanillaEnvFog modes). hasFog fogs the LODs with whatever fog is left on the render system
+     * (VoxyFogParameters.current()); hasFade alpha-fades the LODs at the Voxy render distance edge.
+     */
     public enum FogMode {
         FOG_AND_FADE(false, true, true),
         FOG(false, true, false),

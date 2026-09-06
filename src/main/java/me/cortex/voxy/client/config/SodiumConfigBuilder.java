@@ -6,7 +6,7 @@ import net.caffeinemc.mods.sodium.api.config.option.*;
 import net.caffeinemc.mods.sodium.api.config.structure.*;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.*;
@@ -16,11 +16,11 @@ public class SodiumConfigBuilder {
 
     private static class Enabler {
         public final Predicate<ConfigState> tester;
-        public final Identifier[] dependencies;
+        public final ResourceLocation[] dependencies;
         public final boolean joinParent;
         public Enabler inheritedEnabler;
         public Enabler baseEnabler;
-        public Enabler(Predicate<ConfigState> tester, Identifier[] dependencies, boolean joinParent) {
+        public Enabler(Predicate<ConfigState> tester, ResourceLocation[] dependencies, boolean joinParent) {
             this.tester = tester;
             this.dependencies = dependencies;
             this.joinParent = joinParent;
@@ -28,7 +28,7 @@ public class SodiumConfigBuilder {
         public Enabler(Predicate<ConfigState> tester, String[] dependencies) {
             this(tester, dependencies, false);
         }
-        public Enabler(Predicate<ConfigState> tester, Identifier[] dependencies) {
+        public Enabler(Predicate<ConfigState> tester, ResourceLocation[] dependencies) {
             this(tester, dependencies, false);
         }
         public Enabler(Predicate<ConfigState> tester, String[] dependencies, boolean joinParent) {
@@ -37,7 +37,7 @@ public class SodiumConfigBuilder {
 
         /*
         public static Enabler joinAnd(Enabler... enablers) {
-            Set<Identifier> identifiers = new HashSet<>();
+            Set<ResourceLocation> identifiers = new HashSet<>();
             for (var e : enablers) {
                 for (var i : e.dependencies) {
                     identifiers.add(i);
@@ -51,11 +51,11 @@ public class SodiumConfigBuilder {
                 }
                 return true;
             };
-            var newEnabler = new Enabler(tester, identifiers.toArray(Identifier[]::new));
+            var newEnabler = new Enabler(tester, identifiers.toArray(ResourceLocation[]::new));
             return newEnabler;
         }*/
         public Enabler joinAnd(Enabler parent) {
-            Set<Identifier> identifiers = new HashSet<>();
+            Set<ResourceLocation> identifiers = new HashSet<>();
             for (var i : this.dependencies) {
                 identifiers.add(i);
             }
@@ -71,7 +71,7 @@ public class SodiumConfigBuilder {
                 }
                 return true;
             };
-            var newEnabler = new Enabler(tester, identifiers.toArray(Identifier[]::new));
+            var newEnabler = new Enabler(tester, identifiers.toArray(ResourceLocation[]::new));
             newEnabler.baseEnabler = this;
             newEnabler.inheritedEnabler = parent;
             return newEnabler;
@@ -118,7 +118,7 @@ public class SodiumConfigBuilder {
             return this.setEnabler0(new Enabler(enabler, dependencies, true));
         }
 
-        public TYPE setEnablerInherit(Predicate<ConfigState> enabler, Identifier... dependencies) {
+        public TYPE setEnablerInherit(Predicate<ConfigState> enabler, ResourceLocation... dependencies) {
             return this.setEnabler0(new Enabler(enabler, dependencies, true));
         }
 
@@ -126,7 +126,7 @@ public class SodiumConfigBuilder {
             if (enabler == null) {
                 return this.setEnabler(s->true);
             }
-            var id = Identifier.parse(enabler);
+            var id = ResourceLocation.parse(enabler);
             return this.setEnabler(s->s.readBooleanOption(id), enabler);
         }
 
@@ -230,8 +230,8 @@ public class SodiumConfigBuilder {
         }
 
         protected Consumer<TYPE> postRunner;
-        protected Identifier[] postRunnerConflicts;
-        protected Identifier[] postChangeFlags;
+        protected ResourceLocation[] postRunnerConflicts;
+        protected ResourceLocation[] postChangeFlags;
         public OPTION setPostChangeRunner(Consumer<TYPE> postRunner, String... dontRunIfChangedVars) {
             this.postRunner = postRunner;
             this.postRunnerConflicts = mapIds(dontRunIfChangedVars);
@@ -250,9 +250,9 @@ public class SodiumConfigBuilder {
             option.setName(this.name);
             option.setTooltip(this.tooltip);
 
-            Set<Identifier> flags = new LinkedHashSet<>();
+            Set<ResourceLocation> flags = new LinkedHashSet<>();
             if (this.postRunner != null) {
-                var id = Identifier.parse(this.id);
+                var id = ResourceLocation.parse(this.id);
                 var runner = this.postRunner;
                 var getter = this.getter;
                 ctx.postRunner.register(id, ()->runner.accept(getter.get()), this.postRunnerConflicts);
@@ -264,7 +264,7 @@ public class SodiumConfigBuilder {
             }
 
             if (!flags.isEmpty()) {
-                option.setFlags(flags.toArray(Identifier[]::new));
+                option.setFlags(flags.toArray(ResourceLocation[]::new));
             }
 
             option.setBinding(this.setter, this.getter);
@@ -311,7 +311,7 @@ public class SodiumConfigBuilder {
 
         @Override
         protected IntegerOptionBuilder createType(ConfigBuilder builder) {
-            return builder.createIntegerOption(Identifier.parse(this.id));
+            return builder.createIntegerOption(ResourceLocation.parse(this.id));
         }
 
         @Override
@@ -338,7 +338,7 @@ public class SodiumConfigBuilder {
 
         @Override
         protected BooleanOptionBuilder createType(ConfigBuilder builder) {
-            return builder.createBooleanOption(Identifier.parse(this.id));
+            return builder.createBooleanOption(ResourceLocation.parse(this.id));
         }
     }
 
@@ -363,7 +363,7 @@ public class SodiumConfigBuilder {
 
         @Override
         protected EnumOptionBuilder<T> createType(ConfigBuilder builder) {
-            return builder.createEnumOption(Identifier.parse(this.id), this.theEnum);
+            return builder.createEnumOption(ResourceLocation.parse(this.id), this.theEnum);
         }
 
         @Override
@@ -382,20 +382,20 @@ public class SodiumConfigBuilder {
         return arr;
     }
 
-    private static Identifier[] mapIds(String[] strings) {
-        return map(strings, Identifier::parse, Identifier[]::new);
+    private static ResourceLocation[] mapIds(String[] strings) {
+        return map(strings, ResourceLocation::parse, ResourceLocation[]::new);
     }
 
 
     public static class PostApplyOps implements FlagHook {
-        private record Hook(Identifier name, Runnable runnable, Set<Identifier> conflicts) {}
-        private Map<Identifier, Hook> hooks = new LinkedHashMap<>();
+        private record Hook(ResourceLocation name, Runnable runnable, Set<ResourceLocation> conflicts) {}
+        private Map<ResourceLocation, Hook> hooks = new LinkedHashMap<>();
 
         public PostApplyOps register(String name, Runnable postRunner, String... conflicts) {
-            return this.register(Identifier.parse(name), postRunner, mapIds(conflicts));
+            return this.register(ResourceLocation.parse(name), postRunner, mapIds(conflicts));
         }
 
-        public PostApplyOps register(Identifier name, Runnable postRunner, Identifier... conflicts) {
+        public PostApplyOps register(ResourceLocation name, Runnable postRunner, ResourceLocation... conflicts) {
             this.hooks.put(name, new Hook(name, postRunner, new LinkedHashSet<>(List.of(conflicts))));
             return this;
         }
@@ -418,12 +418,12 @@ public class SodiumConfigBuilder {
         }
 
         @Override
-        public Collection<Identifier> getTriggers() {
+        public Collection<ResourceLocation> getTriggers() {
             return this.hooks.keySet();
         }
 
         @Override
-        public void accept(Collection<Identifier> identifiers, ConfigState configState) {
+        public void accept(Collection<ResourceLocation> identifiers, ConfigState configState) {
             for (var id : identifiers) {
                 var hook = this.hooks.get(id);
                 if (hook != null) {

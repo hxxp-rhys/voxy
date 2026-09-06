@@ -23,6 +23,11 @@ public class DelegatingStorageAdaptor extends StorageBackend {
     }
 
     @Override
+    public boolean sectionExists(long key) {
+        return this.delegate.sectionExists(key);
+    }
+
+    @Override
     public void setSectionData(long key, MemoryBuffer data) {
         this.delegate.setSectionData(key, data);
     }

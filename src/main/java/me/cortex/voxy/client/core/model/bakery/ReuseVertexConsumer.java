@@ -3,20 +3,26 @@ package me.cortex.voxy.client.core.model.bakery;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import me.cortex.voxy.common.util.MemoryBuffer;
-import net.minecraft.client.model.geom.builders.UVPair;
-import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
-import net.minecraft.client.renderer.texture.MipmapStrategy;
-import net.minecraft.client.resources.model.geometry.BakedQuad;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.block.model.BakedQuad;
 import org.lwjgl.system.MemoryUtil;
 
 public final class ReuseVertexConsumer implements VertexConsumer {
     public static final int VERTEX_FORMAT_SIZE = 24;
+
+    //1.21.1: BakedQuad.getVertices() is packed in DefaultVertexFormat.BLOCK, 8 ints per vertex:
+    // position xyz (float bits), colour, uv0 uv (float bits), uv2, normal + padding
+    // (see VertexConsumer.putBulkData and sodium's BakedQuadMixin/ModelQuadUtil for the same decode)
+    private static final int BAKED_QUAD_POSITION_INDEX = 0;
+    private static final int BAKED_QUAD_TEXTURE_INDEX = 4;
+
     private MemoryBuffer buffer = new MemoryBuffer(8192);
     private long ptr;
     private int count;
     private int defaultMeta;
 
     public boolean anyShaded;
+    //1.21.1: there is no MipmapStrategy/DARK_CUTOUT sprite metadata so this is never set (always the non darkened path)
     public boolean anyDarkendTex;
     public boolean anyDiscard;
 
@@ -87,31 +93,37 @@ public final class ReuseVertexConsumer implements VertexConsumer {
         return this;
     }
 
-    @Override
-    public VertexConsumer setLineWidth(float f) {
-        return null;
+    //1.21.1: setLineWidth does not exist on the VertexConsumer interface
+
+    //1.21.1: a BakedQuad carries no layer (materialInfo()) so the caller passes the RenderType the quad was requested for
+    public ReuseVertexConsumer quad(BakedQuad quad, RenderType layer) {
+        return this.quad(quad, layer, false);
     }
 
-    public ReuseVertexConsumer quad(BakedQuad quad) {
-        return this.quad(quad, false);
-    }
-
-    public ReuseVertexConsumer quad(BakedQuad quad, boolean forceSolid) {
+    public ReuseVertexConsumer quad(BakedQuad quad, RenderType layer, boolean forceSolid) {
         int meta = 0;
-        meta |= forceSolid?0:(quad.materialInfo().layer()!=ChunkSectionLayer.SOLID?1:0);//has discard
-        meta |= quad.materialInfo().isTinted()?4:0;//has tinting
+        meta |= forceSolid?0:(layer!=RenderType.solid()?1:0);//has discard
+        meta |= quad.isTinted()?4:0;//has tinting
         return this.quad(quad, meta);
     }
 
     public ReuseVertexConsumer quad(BakedQuad quad, int metadata) {
-        this.anyShaded |= quad.materialInfo().shade();
-        this.anyDarkendTex |= quad.materialInfo().sprite().contents().mipmapStrategy == MipmapStrategy.DARK_CUTOUT;
+        this.anyShaded |= quad.isShade();
         this.ensureCanPut();
+        int[] vertices = quad.getVertices();
+        int stride = vertices.length / 4;
+        if (stride < BAKED_QUAD_TEXTURE_INDEX + 2 || stride * 4 != vertices.length) {
+            throw new IllegalStateException("Unexpected BakedQuad vertex stride: " + vertices.length);
+        }
         for (int i = 0; i < 4; i++) {
-            var pos = quad.position(i);
-            this.addVertex(pos.x(), pos.y(), pos.z());
-            long puv = quad.packedUV(i);
-            this.setUv(UVPair.unpackU(puv),UVPair.unpackV(puv));
+            int offset = i * stride;
+            this.addVertex(
+                    Float.intBitsToFloat(vertices[offset + BAKED_QUAD_POSITION_INDEX]),
+                    Float.intBitsToFloat(vertices[offset + BAKED_QUAD_POSITION_INDEX + 1]),
+                    Float.intBitsToFloat(vertices[offset + BAKED_QUAD_POSITION_INDEX + 2]));
+            this.setUv(
+                    Float.intBitsToFloat(vertices[offset + BAKED_QUAD_TEXTURE_INDEX]),
+                    Float.intBitsToFloat(vertices[offset + BAKED_QUAD_TEXTURE_INDEX + 1]));
 
             this.meta(metadata|this.globalOrMetadata);
         }

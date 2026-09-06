@@ -10,6 +10,7 @@ import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.client.core.rendering.section.geometry.IGeometryData;
 import me.cortex.voxy.common.Logger;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.Direction;
 
 import java.lang.reflect.InvocationTargetException;
 import java.util.List;
@@ -72,12 +73,16 @@ public abstract class AbstractSectionRenderer <T extends Viewport<T>, J extends 
     public void addDebug(List<String> lines) {}
 
     protected static void addDirectionalFaceTint(Shader.Builder<?> builder, ClientLevel cl) {
-        var cardinalLight = cl.cardinalLighting();
-        builder.define("NO_SHADE_FACE_TINT", cardinalLight.up());
-        builder.define("UP_FACE_TINT", cardinalLight.up());
-        builder.define("DOWN_FACE_TINT", cardinalLight.down());
-        builder.define("Z_AXIS_FACE_TINT", cardinalLight.north());//assumed here that Direction.SOUTH returns the same value
-        builder.define("X_AXIS_FACE_TINT", cardinalLight.east());//assumed here that Direction.WEST returns the same value
+        // 1.21.1: there is no ClientLevel.cardinalLighting(); the per-face shade values live in
+        // ClientLevel.getShade(Direction, boolean) (ref ClientLevel.java:870-890: no-shade -> constantAmbientLight?0.9:1.0,
+        // UP -> 0.9/1.0, DOWN -> 0.9/0.5, NORTH/SOUTH -> 0.8, EAST/WEST -> 0.6), which is exactly what 26.2's cardinal
+        // lighting record encodes (up() == getShade(UP, true) == getShade(UP, false), ...). Same as upstream 12111
+        // AbstractSectionRenderer.java:77-82.
+        builder.define("NO_SHADE_FACE_TINT", cl.getShade(Direction.UP, false));
+        builder.define("UP_FACE_TINT", cl.getShade(Direction.UP, true));
+        builder.define("DOWN_FACE_TINT", cl.getShade(Direction.DOWN, true));
+        builder.define("Z_AXIS_FACE_TINT", cl.getShade(Direction.NORTH, true));//assumed here that Direction.SOUTH returns the same value
+        builder.define("X_AXIS_FACE_TINT", cl.getShade(Direction.EAST, true));//assumed here that Direction.WEST returns the same value
         /*
         //TODO: generate the tinting table here and use the replacement feature
         float[] tints = new float[7];

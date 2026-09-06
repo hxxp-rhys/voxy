@@ -1,7 +1,6 @@
 package me.cortex.voxy.client.core.model;
 
 import net.caffeinemc.mods.sodium.client.util.color.ColorSRGB;
-import net.minecraft.util.ARGB;
 
 import java.util.Arrays;
 
@@ -278,8 +277,21 @@ public class TextureUtils {
                 r / 4,
                 g / 4,
                 b / 4,
-                darkend ? ((int) a) / 4 : ARGB.linearToSrgbChannel(a / 4)
+                darkend ? ((int) a) / 4 : linearToSrgbChannel(a / 4)
         );
+    }
+
+    //1.21.1: net.minecraft.util.ARGB.linearToSrgbChannel does not exist, this is the exact sRGB transfer function
+    // (same as Roxy's RoxyColorBridge.linearToSrgbChannel), returns the 0-255 non-linear channel value
+    public static int linearToSrgbChannel(float linear) {
+        if (Float.isNaN(linear)) {
+            return 0;
+        }
+        float clamped = Math.max(0.0F, Math.min(1.0F, linear));
+        float srgb = clamped <= 0.0031308F
+                ? clamped * 12.92F
+                : 1.055F * (float) Math.pow(clamped, 1.0 / 2.4) - 0.055F;
+        return Math.max(0, Math.min(255, Math.round(srgb * 255.0F)));
     }
 
 }

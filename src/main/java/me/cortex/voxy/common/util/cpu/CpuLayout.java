@@ -128,15 +128,27 @@ public class CpuLayout {
 
     public static final Core[] CORES;
     static {
+        // Server-safety (brief contract C11): org.lwjgl.system.Platform does not exist on a production dedicated
+        // server (the vanilla server ships oshi + jna but no LWJGL, and NeoForge adds none). This <clinit> is
+        // reachable server-side both through VoxyConfig's field initializers and through third-party reflection
+        // (voxyworldgenv2 probes me.cortex.voxy.client.config.VoxyConfig with an initializing Class.forName). An
+        // uncaught NoClassDefFoundError here would kill server mod-loading or the caller's worker thread, so catch
+        // Throwable (not just Exception): CORES == null makes getCoreCount() fall back to availableProcessors().
+        // NB: a dev-environment runServer masks this - the userdev classpath has LWJGL.
         Core[] cores = null;
         try {
-            if (Platform.get() == Platform.WINDOWS) {
+            var platform = Platform.get();
+            if (platform == Platform.WINDOWS) {
                 cores = generateCoreLayoutWindows();
-            } else if (Platform.get() == Platform.LINUX) {
+            } else if (platform == Platform.LINUX) {
                 cores = generateCoreLayoutLinux();
             }
-        } catch (Exception e) {
-            Logger.error("Failed to generate cpu core layout, falling back to null: ", e);
+        } catch (NoClassDefFoundError | UnsatisfiedLinkError e) {
+            // Expected on a production dedicated server: no LWJGL core on the module path (voxyworldgenv2 initialises
+            // VoxyConfig reflectively there, which reaches this class). Not an error - the availableProcessors() fallback is used.
+            Logger.info("CPU layout detection unavailable (" + e.getClass().getSimpleName() + "); using Runtime.availableProcessors() fallback");
+        } catch (Throwable t) {
+            Logger.error("Failed to generate cpu core layout, falling back to null: ", t);
         }
         CORES = cores;
     }

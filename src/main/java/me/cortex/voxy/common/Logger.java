@@ -57,12 +57,22 @@ public class Logger {
         }
     }
 
+    //Never call on a dedicated server: resolving Minecraft there fails with NoClassDefFoundError
     public static void showInHUD(String msg) {
+        if (VoxyCommon.IS_DEDICATED_SERVER) {
+            return;
+        }
+        showInHUD0(msg);
+    }
+
+    //Kept in its own method so the Minecraft class is only resolved when the HUD path actually executes
+    private static void showInHUD0(String msg) {
         var instance = Minecraft.getInstance();
         if (instance != null) {
             instance.executeIfPossible(() -> {
                 var player = Minecraft.getInstance().player;
-                if (player != null) instance.gui.chatListener().handleSystemMessage(Component.literal(msg), true);
+                //1.21.1: Gui.chatListener() -> Minecraft.getChatListener(); handleSystemMessage(Component, boolean isOverlay)
+                if (player != null) instance.getChatListener().handleSystemMessage(Component.literal(msg), true);
             });
         }
     }

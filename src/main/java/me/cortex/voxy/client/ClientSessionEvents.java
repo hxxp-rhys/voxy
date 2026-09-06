@@ -24,6 +24,9 @@ public class ClientSessionEvents {
         if (!inSession) throw new IllegalStateException("Cannot end a session while not in a session");
         inSession = false;
 
+        //1.21.1 (RMN, brief contract C10): the LOD resync verifier holds engine references on a worker thread,
+        // it must be stopped before the instance (and its storages) go away
+        LodResyncVerifier.stopForTeardown();
         VoxyCommon.shutdownInstance();
     }
 }

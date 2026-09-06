@@ -9,7 +9,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(Minecraft.class)
 public class MixinMinecraft {
-    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V", at = @At("TAIL"))
+    //1.21.1: Minecraft has disconnect(), disconnect(Screen) and disconnect(Screen, boolean keepResourcePacks); the
+    // first two delegate to the 2-arg overload which does the real teardown, so only that one is targeted
+    // (ref/mc/net/minecraft/client/Minecraft.java:2138-2146).
+    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;Z)V", at = @At("TAIL"))
     private void voxy$injectWorldClose(CallbackInfo ci) {
         if (ClientSessionEvents.inSession) {
             ClientSessionEvents.sessionEnd();
