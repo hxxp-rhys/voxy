@@ -77,6 +77,10 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
         }
 
         this.depthBlit = new FullscreenBlit(properties, "voxy:post/blit_texture_depth_cutout.frag");
+
+        if (this.deferTranslucency) {
+            me.cortex.voxy.common.Logger.info("Iris pipeline: translucent LODs are deferred to the translucent terrain pass (shader pack opted in)");
+        }
     }
 
     @Override
@@ -166,6 +170,41 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
     }
 
     @Override
+    protected boolean setupDeferredTranslucent(Viewport<?> viewport, int sourceDepthTexture, int srcWidth, int srcHeight) {
+        var depthTex = this.fbTranslucent.getDepthTex();
+        if (depthTex == null || depthTex.getWidth() != viewport.width || depthTex.getHeight() != viewport.height) {
+            return false;//The cutout pass has not run for this viewport
+        }
+        if (!this.data.useViewportDims) {
+            srcWidth = viewport.width;
+            srcHeight = viewport.height;
+        }
+        // fbTranslucent already holds the opaque LOD depth and stencil 0 wherever vanilla TERRAIN existed during the
+        // cutout pass (blitted in postOpaquePreTranslucent). Add, without clearing, everything vanilla has drawn since
+        // then (entities, block entities): the translucent LODs are then drawn only where nothing vanilla occludes them.
+        this.initDepthStencil(sourceDepthTexture, this.fbTranslucent.framebuffer.id, srcWidth, srcHeight, viewport.width, viewport.height, false);
+        return true;
+    }
+
+    @Override
+    protected void finishDeferredTranslucent(Viewport<?> viewport) {
+        // Keep the vxDepthTexTrans contract the pack relies on (far plane wherever vanilla geometry is in front),
+        // exactly as postOpaquePreTranslucent does for vxDepthTexOpaque.
+        if (this.shaderDepthHackFixTransformBlit != null) {
+            this.fbTranslucent.bind();
+            glEnable(GL_DEPTH_TEST);
+            glColorMask(false, false, false, false);
+            glDepthFunc(GL_ALWAYS);
+            glStencilFunc(GL_EQUAL, 0, 0xFF);
+            this.shaderDepthHackFixTransformBlit.blit();
+            glDepthFunc(this.properties.closerEqualDepthCompare());
+            glColorMask(true, true, true, true);
+        }
+        glDisable(GL_STENCIL_TEST);
+        glDisable(GL_DEPTH_TEST);
+    }
+
+    @Override
     protected void finish(Viewport<?> viewport, int sourceDepthTexture, int outputFramebuffer, int srcWidth, int srcHeight) {
         if (this.data.renderToVanillaDepth) {
             //We can only depthblit out if destination size is the same, if they arnt, force them tobe
@@ -228,7 +267,7 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
 
     @Override
     public void addDebug(List<String> debug) {
-        debug.add("Using: " + this.getClass().getSimpleName());
+        debug.add("Using: " + this.getClass().getSimpleName() + (this.deferTranslucency ? " (deferred translucents)" : ""));
         super.addDebug(debug);
     }
 

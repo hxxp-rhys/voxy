@@ -106,7 +106,11 @@ public class IrisVoxyRenderPipelineData {
         var ssboSet = createSSBOLayouts(patch.getSSBOs(), ssboHolder);
 
         var opaqueDrawTargets = getDrawBuffers(patch.getOpqaueTargets(), ipipe.getFlippedAfterPrepare(), ((IrisRenderingPipelineAccessor)ipipe).getRenderTargets());
-        var translucentDrawTargets = getDrawBuffers(patch.getTranslucentTargets(), ipipe.getFlippedAfterPrepare(), ((IrisRenderingPipelineAccessor)ipipe).getRenderTargets());
+        // A deferred translucent pass runs after Iris' deferred programs, so it must write the copies those programs
+        // left current (the same flip set Iris uses for Sodium's translucent pass); the inline pass runs before them.
+        var translucentDrawTargets = getDrawBuffers(patch.getTranslucentTargets(),
+                patch.deferedTranslucentRendering() ? ipipe.getFlippedAfterTranslucent() : ipipe.getFlippedAfterPrepare(),
+                ((IrisRenderingPipelineAccessor)ipipe).getRenderTargets());
 
 
 
@@ -141,7 +145,7 @@ public class IrisVoxyRenderPipelineData {
     }
 
     public boolean shouldDeferTranslucency() {
-        return false;
+        return this.deferTranslucency;
     }
 
     public record StructLayout(int size, String layout, LongConsumer updater) {}
@@ -512,7 +516,12 @@ public class IrisVoxyRenderPipelineData {
             }
         };
 
-        ipipe.addGbufferOrShadowSamplers(samplerBuilder, imageBuilder, ipipe::getFlippedAfterPrepare, false, true, true, false);
+        // Same reasoning for the sampled buffers: with a deferred translucent pass the samplers are bound both before
+        // (opaque pass) and after (translucent pass) Iris' deferred programs, so use Iris' own phase-dependent flip set.
+        java.util.function.Supplier<ImmutableSet<Integer>> flipped = patch.deferedTranslucentRendering()
+                ? () -> ipipe.isBeforeTranslucent ? ipipe.getFlippedAfterPrepare() : ipipe.getFlippedAfterTranslucent()
+                : ipipe::getFlippedAfterPrepare;
+        ipipe.addGbufferOrShadowSamplers(samplerBuilder, imageBuilder, flipped, false, true, true, false);
 
         //samplerSet contains our samplers
         if (samplerSet.size() != samplerNameSet.size()) {

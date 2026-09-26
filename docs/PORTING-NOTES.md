@@ -120,6 +120,32 @@ mods from the classpath); the bundled libraries are put on the dev classpath exp
   `voxy.json`): Voxy's opaque/translucent patches apply and the `IrisVoxyRenderPipeline` is
   used.
 
+* Deferred translucent LODs (added 2026-09-06, opt-in): a pack that sets `"deferTranslucentRendering": true`
+  in its voxy.json (together with `excludeLodsFromVanillaDepth`) gets Voxy's translucent LOD pass drawn at
+  the start of Sodium's TRANSLUCENT terrain pass instead of inside the cutout pass, depth-tested against
+  the vanilla depth of that moment (entities and block entities included), so LOD water can no longer be
+  composited over entities. The pack must not sample `vxDepthTexTrans` in its deferred programs (it is one
+  frame stale there); the `photon_v1.3b-rmnfix2` pack does this (see `docs/PHOTON-VOXY-NOTES.md`).
+  Implementation: `IrisShaderPatch` (flag), `AbstractRenderPipeline.runDeferredTranslucent`,
+  `IrisVoxyRenderPipeline.setupDeferredTranslucent/finishDeferredTranslucent`,
+  `VoxyRenderSystem.renderDeferredTranslucent`, `MixinDefaultChunkRenderer` (TRANSLUCENT pass HEAD).
+* Dev-only scripted harness `me.cortex.voxy.devharness.DevHarness` (excluded from the jar, inert without
+  `-Dvoxy.devHarness`): `./gradlew runClient -Pharness=<script> -PharnessWorld=<save>[:<seed>]` opens or
+  creates a world, runs commands, teleports to an ocean, spawns entities, toggles shaders/camera/FOV and
+  saves screenshots - used to reproduce and verify the Photon fixes. It opens the world only after NeoForge
+  fired `RegisterPayloadHandlersEvent` (nested `ModBusHooks`): with the RMN mod set, rrls shows the title
+  screen while the initial resource reload - in which NeoForge locks its network registry - is still
+  running, and a join from that early title screen (vanilla `--quickPlaySingleplayer` included) is rejected
+  by the integrated server as an unregistered "vanilla" client (see `docs/PORT-STATUS.md`).
+
+* Fog (contract C2, revised 2026-09-07): the terrain fog call is identified by its call site
+  (`minecraft.MixinLevelRenderer` flags the "fog".."terrain_setup" window of `LevelRenderer.renderLevel`),
+  `VoxyFogEvents` (NeoForge `ViewportEvent.RenderFog`, lowest priority) removes the render-distance wall
+  (and environmental fog for the FADE/OFF modes), keeps fluid fogs including modded fluids, and
+  `minecraft.MixinFogRenderer` (priority 1500, TAIL of `FogRenderer.setupFog`) re-applies the removal when a
+  later TAIL injector (sodium-extra's fog distance) rewrote it. Other mods' FOG_TERRAIN calls (sodium-extra
+  cloud fog) are left untouched.
+
 ### World / ingest / import
 * `Level` / `ClientLevel` constructor mixins use the 1.21.1 signatures; `PalettedContainer`
   internals are opened by AT and read as a single volatile snapshot; the Lithium palette
@@ -179,6 +205,11 @@ mods from the classpath); the bundled libraries are put on the dev classpath exp
   cleanup. Open findings (one medium: sodium-extra's fog hook can overwrite Voxy's fog push
   when its fog distance is non-zero; the rest low) are listed with reviewer evidence and
   proposed fixes in `docs/PORT-STATUS.md` and `docs/port-session/review-findings.json`.
+
+* 2026-09-06/07 (dev harness, `run/client/screenshots`): Photon rmnfix2 pack + ported Voxy: translucent-typed
+  entities (player skin, armor stand, slime skin, horse markings, allay, items, nametags) render correctly against
+  LOD sea/coast, first and third person, with particles; shaders off/on; sodium-extra 0.9.3 with fog distance 3
+  chunks leaves the LODs unfogged (fog removal re-applied, see the Fog bullet above).
 
 ## Known behaviour to be aware of
 * Under the integrated server the LOD-resync server logs

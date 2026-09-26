@@ -313,6 +313,9 @@ public class VoxyRenderSystem {
         //The entire rendering pipeline (excluding the chunkbound thing)
         this.pipeline.runPipeline(viewport, sourceDepthTexture, sourceColourTexture, scrWidth, scrHeight);
         GPUTiming.INSTANCE.marker();
+        // When the pipeline defers its translucent pass, the start of the TRANSLUCENT terrain pass finishes this frame
+        this.pendingDeferredTranslucent = this.pipeline.defersTranslucency() ? viewport : null;
+        this.pendingDeferredFrameId = viewport.frameId;
 
 
         TimingStatistics.main.stop();
@@ -341,6 +344,61 @@ public class VoxyRenderSystem {
 
         GPUTiming.INSTANCE.tick();
 
+        this.restoreGlState(oldFB, dims, oldBufferBindings);
+
+        TimingStatistics.all.stop();
+
+        //TimingStatistics.I.start();
+        //glFlush();
+        //TimingStatistics.I.stop();
+    }
+
+    private Viewport<?> pendingDeferredTranslucent;
+    private int pendingDeferredFrameId;
+
+    /**
+     * Second half of a frame whose pipeline defers its translucent LOD pass (voxy.json "deferTranslucentRendering",
+     * Iris only): called at the start of Sodium's TRANSLUCENT terrain pass, i.e. after entities and block entities
+     * were drawn and after Iris copied depthtex1 and ran its deferred programs, so the translucent LODs are depth
+     * tested against everything vanilla has drawn so far. Uses the viewport and draw calls the cutout pass built.
+     */
+    public void renderDeferredTranslucent() {
+        var viewport = this.pendingDeferredTranslucent;
+        if (viewport == null) return;
+        this.pendingDeferredTranslucent = null;
+        if (viewport != this.getViewport()) return;//The cutout pass belonged to another viewport (e.g. shadow pass)
+        if (viewport.frameId != this.pendingDeferredFrameId) return;//Left over from a frame whose translucent pass never ran
+
+        // The framebuffer bound at the start of the translucent pass is not necessarily a gbuffer (Iris has just run its
+        // deferred programs), but every Iris gbuffer framebuffer and the vanilla main target share the main render
+        // target's depth texture (Iris RenderTargets is created with main.getDepthTextureId()), so read that directly.
+        int sourceDepthTexture = Minecraft.getInstance().getMainRenderTarget().getDepthTextureId();
+        if (sourceDepthTexture <= 0) return;//0 = none, -1 = destroyed render target
+
+        int[] oldBufferBindings = new int[10];
+        for (int i = 0; i < oldBufferBindings.length; i++) {
+            oldBufferBindings[i] = glGetIntegeri(GL_SHADER_STORAGE_BUFFER_BINDING, i);
+        }
+        int oldFB = GL11.glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING);
+        int[] dims = new int[4];
+        glGetIntegerv(GL_VIEWPORT, dims);
+
+        GlStateManager._enableDepthTest();
+        GlStateManager._depthFunc(this.properties.closerEqualDepthCompare());
+        GlStateManager._depthMask(true);
+        GlStateManager._disablePolygonOffset();
+
+        glViewport(0, 0, viewport.width, viewport.height);
+        int scrWidth  = glGetTextureLevelParameteri(sourceDepthTexture, 0, GL_TEXTURE_WIDTH);
+        int scrHeight = glGetTextureLevelParameteri(sourceDepthTexture, 0, GL_TEXTURE_HEIGHT);
+
+        this.pipeline.runDeferredTranslucent(viewport, sourceDepthTexture, scrWidth, scrHeight);
+
+        this.restoreGlState(oldFB, dims, oldBufferBindings);
+    }
+
+    /** Puts the raw GL state (and GlStateManager's cache of it) back into a known configuration after a Voxy pass. */
+    private void restoreGlState(int oldFB, int[] dims, int[] oldBufferBindings) {
         glBindFramebuffer(GlConst.GL_FRAMEBUFFER, oldFB);
         glViewport(dims[0], dims[1], dims[2], dims[3]);
 
@@ -381,12 +439,6 @@ public class VoxyRenderSystem {
 
             //((SodiumShader) Iris.getPipelineManager().getPipelineNullable().getSodiumPrograms().getProgram(DefaultTerrainRenderPasses.CUTOUT).getInterface()).setupState(DefaultTerrainRenderPasses.CUTOUT, fogParameters);
         }
-
-        TimingStatistics.all.stop();
-
-        //TimingStatistics.I.start();
-        //glFlush();
-        //TimingStatistics.I.stop();
 
         /*
         TimingStatistics.F.start();
@@ -448,31 +500,33 @@ public class VoxyRenderSystem {
      * GlFramebuffer.java:36). This is what upstream 12111 did with glGetNamedFramebufferAttachmentParameteri on the
      * bound framebuffer (upstream AbstractRenderPipeline.java:153) and what Roxy's RoxyFramebufferBridge does.
      *
-     * @return {depthTexture, colourTexture, width, height}; width/height are the level 0 size of the depth texture
+     * @return {depthTexture, colourTexture, width, height}, or null when the bound framebuffer cannot be used (skip the pass);
+     * width/height are the level 0 size of the depth texture
      * (Roxy RoxyFramebufferBridge.textureWidth/textureHeight), which for the main target equals RenderTarget.width/height
      */
-    public static int[] getBoundFramebufferTextures() {
+    public static int @Nullable [] getBoundFramebufferTextures() {
         int drawFb = GL11.glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING);
-        int depthTexture = 0;
-        int colourTexture = 0;
-        if (drawFb != 0) {
-            depthTexture = getBoundAttachmentTexture(GL_DEPTH_ATTACHMENT);
-            colourTexture = getBoundAttachmentTexture(GL_COLOR_ATTACHMENT0);
+        var mainTarget = Minecraft.getInstance().getMainRenderTarget();
+        if (drawFb == 0 || drawFb == mainTarget.frameBufferId) {
+            //The default framebuffer cannot be sampled from; vanilla/sodium render the level into the main render
+            // target, whose depth and colour are GL_TEXTURE_2D attachments (ref RenderTarget.java:118-127)
+            int depthTexture = mainTarget.getDepthTextureId();
+            if (depthTexture <= 0) {
+                throw new IllegalStateException("Cannot source the depth texture, the main render target has no depth texture (bound fb " + drawFb + ")");
+            }
+            return new int[]{depthTexture, mainTarget.getColorTextureId(), mainTarget.width, mainTarget.height};
         }
-        if (drawFb == 0 || depthTexture == 0) {
-            //The default framebuffer (or a framebuffer without texture attachments) cannot be sampled from, fall back
-            // to the main render target which is what vanilla/sodium render the terrain into
-            var mainTarget = Minecraft.getInstance().getMainRenderTarget();
+        int depthTexture = getBoundAttachmentTexture(GL_DEPTH_ATTACHMENT);
+        int colourTexture = getBoundAttachmentTexture(GL_COLOR_ATTACHMENT0);
+        if (depthTexture == 0 || colourTexture == 0) {
+            //Some other framebuffer (camera/portal/mirror mods) with renderbuffer or missing attachments: its depth
+            // cannot be sampled and its colour cannot be written through a texture, and mixing in the main target's
+            // textures would depth test against one surface while drawing into another - skip the LODs for this pass
             if (!warnedDefaultFramebuffer) {
                 warnedDefaultFramebuffer = true;
-                Logger.warn("Voxy: the bound draw framebuffer (" + drawFb + ") has no depth texture attachment, falling back to the main render target (fb " + mainTarget.frameBufferId + ")");
+                Logger.warn("Voxy: the bound draw framebuffer " + drawFb + " has no sampleable depth/colour texture attachments (depth " + depthTexture + ", colour " + colourTexture + "); LODs are not rendered into it");
             }
-            depthTexture = mainTarget.getDepthTextureId();
-            colourTexture = mainTarget.getColorTextureId();
-            if (depthTexture == 0 || depthTexture == -1) {
-                throw new IllegalStateException("Cannot source the depth texture, neither the bound framebuffer " + drawFb + " nor the main render target have a depth texture");
-            }
-            return new int[]{depthTexture, colourTexture, mainTarget.width, mainTarget.height};
+            return null;
         }
         int width = glGetTextureLevelParameteri(depthTexture, 0, GL_TEXTURE_WIDTH);
         int height = glGetTextureLevelParameteri(depthTexture, 0, GL_TEXTURE_HEIGHT);

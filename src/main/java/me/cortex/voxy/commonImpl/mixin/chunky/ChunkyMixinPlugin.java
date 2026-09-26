@@ -55,7 +55,19 @@ public class ChunkyMixinPlugin implements IMixinConfigPlugin {
     public void preApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {
     }
 
+    /**
+     * chunky.voxy.mixins.json uses defaultRequire = 0 so that a Chunky update which moves the hooked call cannot abort
+     * the game; the price is that a silently unapplied hook would just stop the automatic LOD ingest of pregenerated
+     * chunks. Report it instead: Mixin merges applied handlers into the target under names containing the handler
+     * name (e.g. wrapOperation$<hash>$voxy$...), so their absence after apply means nothing was bound.
+     */
     @Override
     public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {
+        int bound = 0;
+        for (org.objectweb.asm.tree.MethodNode m : targetClass.methods) {
+            if (m.name.contains("voxy$")) bound++;
+        }
+        System.out.println("[voxy] chunky hook applied to " + targetClassName + ": " + bound + " handler(s) bound"
+                + (bound > 0 ? " (OK)" : " (UNEXPECTED - Chunky may have changed; pregenerated chunks will not be ingested automatically)"));
     }
 }

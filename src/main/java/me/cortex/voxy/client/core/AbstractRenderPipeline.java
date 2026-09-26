@@ -144,8 +144,45 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
+    public final boolean defersTranslucency() {
+        return this.deferTranslucency;
+    }
+
+    /**
+     * Second half of a deferred frame (see {@link me.cortex.voxy.client.iris.IrisShaderPatch} "deferTranslucentRendering"):
+     * draws the translucent LODs against the vanilla depth as it is NOW, i.e. with entities and block entities included.
+     * Called from the start of Sodium's TRANSLUCENT terrain pass with the same viewport the cutout pass used.
+     */
+    public void runDeferredTranslucent(Viewport<?> viewport, int sourceDepthTexture, int srcWidth, int srcHeight) {
+        if (!this.deferTranslucency) return;
+        if (!this.setupDeferredTranslucent(viewport, sourceDepthTexture, srcWidth, srcHeight)) return;
+        ((AbstractSectionRenderer)this.sectionRenderer).renderTranslucent(viewport);
+        this.finishDeferredTranslucent(viewport);
+    }
+
+    /** @return false when there is nothing to draw against (no cutout pass ran this frame) */
+    protected boolean setupDeferredTranslucent(Viewport<?> viewport, int sourceDepthTexture, int srcWidth, int srcHeight) {
+        return false;
+    }
+
+    protected void finishDeferredTranslucent(Viewport<?> viewport) {
+        glDisable(GL_STENCIL_TEST);
+    }
+
     protected void initDepthStencil(int sourceDepthTexture, int targetFb, int srcWidth, int srcHeight, int width, int height) {
-        glClearNamedFramebufferfi(targetFb, GL_DEPTH_STENCIL, 0, this.properties.clearDepth(), 1);
+        this.initDepthStencil(sourceDepthTexture, targetFb, srcWidth, srcHeight, width, height, true);
+    }
+
+    /**
+     * Marks every texel where {@code sourceDepthTexture} holds vanilla geometry as "occupied": depth = near plane and
+     * stencil = 0 (Voxy only draws where the stencil is 1). With {@code clearFirst} the target is first reset to
+     * far/stencil 1; without it the marks are ADDED to whatever depth/stencil the target already holds (used by the
+     * deferred translucent pass to add the entities drawn since the cutout pass on top of the opaque LOD depth).
+     */
+    protected void initDepthStencil(int sourceDepthTexture, int targetFb, int srcWidth, int srcHeight, int width, int height, boolean clearFirst) {
+        if (clearFirst) {
+            glClearNamedFramebufferfi(targetFb, GL_DEPTH_STENCIL, 0, this.properties.clearDepth(), 1);
+        }
         // using blit to copy depth from mismatched depth formats is not portable so instead a full screen pass is performed for a depth copy
         // the mismatched formats in this case is the d32 to d24s8
         glBindFramebuffer(GL30.GL_FRAMEBUFFER, targetFb);

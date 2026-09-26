@@ -114,11 +114,25 @@ neoForge {
     runs {
         client {
             client()
-            gameDirectory = project.file('run/client')
+            // -PgameDir=<dir> runs the client from another game directory (e.g. run/clientfull with the full RMN mod set)
+            gameDirectory = project.file((project.findProperty('gameDir') ?: 'run/client').toString())
             systemProperty('neoforge.enabledGameTestNamespaces', 'voxy')
-            // ./gradlew runClient -PquickPlay=<world folder name> jumps straight into an existing singleplayer world
+            // ./gradlew runClient -PquickPlay=<world folder name> jumps straight into an existing singleplayer world.
+            // NOT usable with the RMN mod set: rrls shows the title screen while the initial resource reload (in which
+            // NeoForge locks its network registry) is still running, and quick play joins from that early point, so the
+            // integrated server sees an unregistered "vanilla" client. Use -Pharness/-PharnessWorld instead (the
+            // harness waits for RegisterPayloadHandlersEvent before opening the world).
             if (project.hasProperty('quickPlay')) {
                 programArguments.addAll('--quickPlaySingleplayer', project.property('quickPlay').toString())
+            }
+            // ./gradlew runClient -Pharness=<script file> drives the dev-only scripted test harness
+            // (me.cortex.voxy.devharness, excluded from the shipped jar below)
+            if (project.hasProperty('harness')) {
+                systemProperty('voxy.devHarness', project.property('harness').toString())
+            }
+            // -PharnessWorld=<save name>:<seed> makes the harness open (or create, normal world type) that save
+            if (project.hasProperty('harnessWorld')) {
+                systemProperty('voxy.devHarness.world', project.property('harnessWorld').toString())
             }
         }
         server {
@@ -258,6 +272,11 @@ tasks.register('extractLwjglNatives') {
 jar {
     dependsOn 'extractLwjglNatives'
     from(extractedNativesDir)
+    // development-only scripted test driver (see DevHarness.java); never shipped unless a test build is
+    // requested explicitly with -PincludeHarness=true (used for production-launch verification only)
+    if (!project.hasProperty('includeHarness')) {
+        exclude('me/cortex/voxy/devharness/**')
+    }
     from("LICENSE.md") {
         rename { "${it}_${project.archives_base_name}" }
     }

@@ -1,6 +1,7 @@
 package me.cortex.voxy.client.mixin.minecraft;
 
 import me.cortex.voxy.client.VoxyClientInstance;
+import me.cortex.voxy.client.VoxyFogEvents;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
@@ -34,6 +35,20 @@ public abstract class MixinLevelRenderer implements IVoxyRenderSystemHolder {
     @Override
     public VoxyRenderSystem voxy$getRenderSystem() {
         return this.renderer;
+    }
+
+    // Contract C2: the only FOG_TERRAIN setupFog call vanilla makes for the terrain sits between the "fog" and
+    // "terrain_setup" profiler sections (ref LevelRenderer.java:965-967; both strings occur exactly once in the class).
+    // Flagging that window lets VoxyFogEvents tell it apart from FOG_TERRAIN calls mods make with the same arguments
+    // (sodium-extra's cloud fog). Anchored on constants so third-party injectors around setupFog cannot shift it.
+    @Inject(method = "renderLevel", at = @At(value = "CONSTANT", args = "stringValue=fog"))
+    private void voxy$terrainFogCallBegin(CallbackInfo ci) {
+        VoxyFogEvents.setTerrainFogCallPending(true);
+    }
+
+    @Inject(method = "renderLevel", at = @At(value = "CONSTANT", args = "stringValue=terrain_setup"))
+    private void voxy$terrainFogCallEnd(CallbackInfo ci) {
+        VoxyFogEvents.setTerrainFogCallPending(false);
     }
 
     // ref LevelRenderer.java:683 public void setLevel(@Nullable ClientLevel level); vanilla calls allChanged() itself

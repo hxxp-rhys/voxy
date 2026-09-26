@@ -178,7 +178,11 @@ public class IrisShaderPatch {
         public float[] renderScale;
         public boolean useViewportDims;
         public boolean skipShaderDepthHackFix;
-        //public boolean deferTranslucentRendering;
+        // Opt-in (voxy.json "deferTranslucentRendering": true): draw the translucent LODs at the start of the
+        // translucent terrain pass instead of inside the cutout pass, depth-tested against the vanilla depth of THAT
+        // moment (entities and block entities included). Only honoured together with excludeLodsFromVanillaDepth.
+        // A pack that opts in must not sample vxDepthTexTrans in its deferred programs (it is one frame stale there).
+        public boolean deferTranslucentRendering;
         public String checkValid() {
             if (this.blending != null) {
                 int i = 0;
@@ -273,7 +277,7 @@ public class IrisShaderPatch {
     }
 
     public boolean deferedTranslucentRendering() {
-        return false;//this.patchData.deferTranslucentRendering;
+        return this.patchData.deferTranslucentRendering && this.patchData.excludeLodsFromVanillaDepth;
     }
 
     public Runnable createBlendSetup() {

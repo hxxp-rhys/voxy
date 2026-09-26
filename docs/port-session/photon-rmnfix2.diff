@@ -1,0 +1,238 @@
+diff -ru rmnfix/shaders/include/lighting/shadows/ssrt.glsl variants/photon_v1.3b-rmnfix2/shaders/include/lighting/shadows/ssrt.glsl
+--- rmnfix/shaders/include/lighting/shadows/ssrt.glsl	2026-04-14 16:32:33.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/include/lighting/shadows/ssrt.glsl	2026-09-06 21:17:38.973184500 -0400
+@@ -157,7 +157,7 @@
+         );
+     } else {
+         hit = raymarch_shadow(
+-            lod_depth_tex,
++            lod_depth_tex_shading,
+             lod_projection_matrix,
+             lod_projection_matrix_inverse,
+             vec3(position_screen_xy, depth_lod),
+diff -ru rmnfix/shaders/include/misc/lod_mod_support.glsl variants/photon_v1.3b-rmnfix2/shaders/include/misc/lod_mod_support.glsl
+--- rmnfix/shaders/include/misc/lod_mod_support.glsl	2026-04-12 11:50:53.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/include/misc/lod_mod_support.glsl	2026-09-06 21:17:38.972185700 -0400
+@@ -39,6 +39,7 @@
+ #define combined_depth_tex colortex15
+ #define lod_depth_tex dhDepthTex
+ #define lod_depth_tex_solid dhDepthTex1
++#define lod_depth_tex_shading lod_depth_tex
+ #define lod_depth_tex_scale taau_render_scale
+ #define lod_projection_matrix dhProjection
+ #define lod_projection_matrix_inverse dhProjectionInverse
+@@ -112,6 +113,7 @@
+ #define combined_depth_tex colortex15
+ #define lod_depth_tex vxDepthTexTrans
+ #define lod_depth_tex_solid vxDepthTexOpaque
++#define lod_depth_tex_shading lod_depth_tex_solid
+ #define lod_depth_tex_scale 1.0
+ #define lod_projection_matrix vxProj
+ #define lod_projection_matrix_inverse vxProjInv
+diff -ru rmnfix/shaders/include/misc/raytracer.glsl variants/photon_v1.3b-rmnfix2/shaders/include/misc/raytracer.glsl
+--- rmnfix/shaders/include/misc/raytracer.glsl	2026-04-14 16:32:33.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/include/misc/raytracer.glsl	2026-09-06 21:17:38.972185700 -0400
+@@ -6,7 +6,7 @@
+ #include "/include/utility/space_conversion.glsl"
+ 
+ #if defined SSRT_LOD
+-#define SSRT_DEPTH_SAMPLER lod_depth_tex
++#define SSRT_DEPTH_SAMPLER lod_depth_tex_shading
+ #define SSRT_PROJECTION_MATRIX lod_projection_matrix
+ #define SSRT_PROJECTION_MATRIX_INVERSE lod_projection_matrix_inverse
+ #else
+diff -ru rmnfix/shaders/program/c1_blend_layers.fsh variants/photon_v1.3b-rmnfix2/shaders/program/c1_blend_layers.fsh
+--- rmnfix/shaders/program/c1_blend_layers.fsh	2026-04-14 16:32:33.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/program/c1_blend_layers.fsh	2026-09-06 15:45:55.482026100 -0400
+@@ -225,18 +225,9 @@
+     float front_depth_lod = texelFetch(lod_depth_tex, texel, 0).x;
+     float back_depth_lod = texelFetch(lod_depth_tex_solid, texel, 0).x;
+ 
+-    // Fix Voxy translucents appearing in front of entities.
+-#ifdef VOXY
+-    float z_vanilla =
+-        screen_to_view_space_depth(gbufferProjectionInverse, back_depth);
+-    float z_lod = screen_to_view_space_depth(
+-        lod_projection_matrix_inverse,
+-        front_depth_lod
+-    );
+-    if (front_depth_lod < 1.0 && z_vanilla < z_lod && front_depth == back_depth) {
+-        translucent_color = vec4(0.0);
+-    }
+-#endif
++    // (photon_v1.3b-rmnfix2: the v1.3b "Fix Voxy translucents appearing in front of
++    // entities" guard that zeroed the whole translucent layer here was removed; see the
++    // matching discard in voxy_translucent.glsl, as on Photon main commit 1fac270.)
+ 
+     bool front_is_lod_terrain = is_lod_terrain(front_depth, front_depth_lod);
+     bool back_is_lod_terrain = is_lod_terrain(back_depth, back_depth_lod);
+diff -ru rmnfix/shaders/program/d1_clouds.fsh variants/photon_v1.3b-rmnfix2/shaders/program/d1_clouds.fsh
+--- rmnfix/shaders/program/d1_clouds.fsh	2026-04-14 16:32:33.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/program/d1_clouds.fsh	2026-09-06 21:17:38.973184500 -0400
+@@ -172,7 +172,7 @@
+ 
+     // LoD terrain support
+ #ifdef LOD_MOD_ACTIVE
+-    float depth_lod = depth_max_4x4(lod_depth_tex, lod_depth_tex_scale);
++    float depth_lod = depth_max_4x4(lod_depth_tex_shading, lod_depth_tex_scale);
+     bool is_lod = is_lod_terrain(depth_max, depth_lod);
+ 
+     if (is_lod) {
+diff -ru rmnfix/shaders/program/d2_clouds_upscaling.fsh variants/photon_v1.3b-rmnfix2/shaders/program/d2_clouds_upscaling.fsh
+--- rmnfix/shaders/program/d2_clouds_upscaling.fsh	2026-04-14 16:32:33.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/program/d2_clouds_upscaling.fsh	2026-09-06 21:17:38.973184500 -0400
+@@ -203,7 +203,7 @@
+ 
+ #ifdef LOD_MOD_ACTIVE
+     // Check for LoD terrain
+-    float depth_lod = texelFetch(lod_depth_tex, dst_texel, 0).x;
++    float depth_lod = texelFetch(lod_depth_tex_shading, dst_texel, 0).x;
+     bool is_lod = is_lod_terrain(depth, depth_lod);
+ 
+     float depth_linear =
+diff -ru rmnfix/shaders/program/d3_ao.fsh variants/photon_v1.3b-rmnfix2/shaders/program/d3_ao.fsh
+--- rmnfix/shaders/program/d3_ao.fsh	2026-04-14 16:32:33.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/program/d3_ao.fsh	2026-09-06 21:17:38.973184500 -0400
+@@ -108,7 +108,7 @@
+ 
+ #ifdef LOD_MOD_ACTIVE
+     float depth_mc = texelFetch(depthtex1, view_texel, 0).x;
+-    float depth_lod = texelFetch(lod_depth_tex, view_texel, 0).x;
++    float depth_lod = texelFetch(lod_depth_tex_shading, view_texel, 0).x;
+     bool is_lod = is_lod_terrain(depth_mc, depth_lod);
+ #else
+ #define depth_mc depth
+diff -ru rmnfix/shaders/program/d4_deferred_shading.fsh variants/photon_v1.3b-rmnfix2/shaders/program/d4_deferred_shading.fsh
+--- rmnfix/shaders/program/d4_deferred_shading.fsh	2026-04-14 16:32:33.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/program/d4_deferred_shading.fsh	2026-09-06 21:17:38.973184500 -0400
+@@ -211,7 +211,7 @@
+ 
+ #ifdef LOD_MOD_ACTIVE
+     float depth_mc = texelFetch(depthtex1, texel, 0).x;
+-    float depth_lod = texelFetch(lod_depth_tex, texel, 0).x;
++    float depth_lod = texelFetch(lod_depth_tex_shading, texel, 0).x;
+     bool is_lod = is_lod_terrain(depth_mc, depth_lod);
+ #else
+     const bool is_lod = false;
+diff -ru rmnfix/shaders/program/gbuffers_armor_glint.fsh variants/photon_v1.3b-rmnfix2/shaders/program/gbuffers_armor_glint.fsh
+--- rmnfix/shaders/program/gbuffers_armor_glint.fsh	2026-04-14 16:32:53.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/program/gbuffers_armor_glint.fsh	2026-09-06 21:00:22.604477000 -0400
+@@ -13,7 +13,9 @@
+ 
+ layout(location = 0) out vec4 frag_color;
+ 
+-#if MC_VERSION >= 260100
++// photon_v1.3b-rmnfix2 (option B): glint goes to the forward layer whenever separate entity
++// draws are active (as Photon <= v1.3 did with "#ifdef IS_IRIS"), not only on MC >= 26.1
++#ifdef USE_SEPARATE_ENTITY_DRAWS
+ /* RENDERTARGETS: 13 */
+ #else
+ /* RENDERTARGETS: 3 */
+diff -ru rmnfix/shaders/program/voxy.json variants/photon_v1.3b-rmnfix2/shaders/program/voxy.json
+--- rmnfix/shaders/program/voxy.json	2026-04-12 12:12:16.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/program/voxy.json	2026-09-06 21:17:38.973184500 -0400
+@@ -10,6 +10,7 @@
+         ",
+     "version": 1,
+     "excludeLodsFromVanillaDepth": true,
++    "deferTranslucentRendering": true,
+     "opaqueDrawBuffers": [
+         1
+     ],
+diff -ru rmnfix/shaders/program/voxy_translucent.glsl variants/photon_v1.3b-rmnfix2/shaders/program/voxy_translucent.glsl
+--- rmnfix/shaders/program/voxy_translucent.glsl	2026-04-14 16:32:33.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/program/voxy_translucent.glsl	2026-09-06 15:45:55.483540200 -0400
+@@ -128,6 +128,13 @@
+ void voxy_emitFragment(VoxyFragmentParameters parameters) {
+     vec2 coord = gl_FragCoord.xy * view_pixel_size * rcp(taau_render_scale);
+ 
++    // Discard if vanilla opaque geometry is in front of this fragment, so
++    // Voxy translucent doesn't paint over vanilla entities/glints in
++    // colortex13. (Photon main commit 1fac270, #609)
++    if (texelFetch(depthtex1, ivec2(gl_FragCoord.xy), 0).x < 1.0) {
++        discard;
++    }
++
+     // Get the depth of the solid layer behind this fragment (used for edge
+     // highlight effect)
+ 
+diff -ru rmnfix/shaders/settings.glsl variants/photon_v1.3b-rmnfix2/shaders/settings.glsl
+--- rmnfix/shaders/settings.glsl	2026-04-14 16:32:53.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/settings.glsl	2026-09-06 15:45:55.469467600 -0400
+@@ -608,7 +608,9 @@
+ #ifdef CREPUSCULAR_RAYS 
+ #endif
+ 
+-#if MC_VERSION >= 260100
++// photon_v1.3b-rmnfix2 (option B): restore the Photon v1.3 configuration on Iris
++// (separate entity draws were the default on every Iris version until commit 65704f6).
++#if MC_VERSION >= 260100 || defined IS_IRIS
+   #define USE_SEPARATE_ENTITY_DRAWS
+ #endif
+ 
+diff -ru rmnfix/shaders/shaders.properties variants/photon_v1.3b-rmnfix2/shaders/shaders.properties
+--- rmnfix/shaders/shaders.properties	2026-08-30 13:56:30.000000000 -0400
++++ variants/photon_v1.3b-rmnfix2/shaders/shaders.properties	2026-09-06 21:38:16.297130600 -0400
+@@ -222,46 +222,23 @@
+ program.world1/setup.enabled       = COLORED_LIGHTS
+ program.world1/shadowcomp.enabled  = COLORED_LIGHTS
+ 
+-# RMN fix 1 of 3 -- black nametags (photon issue #569).
+-# Iris maps ShaderKey.TEXT, TEXT_INTENSITY and TEXT_BG (nametag glyphs and the
+-# nametag backdrop) to ProgramId.EntitiesTrans. Disabling that program makes Iris
+-# fall back to ProgramId.Entities -> gbuffers_entities -> program/gbuffers_all_solid,
+-# a deferred gbuffer program drawn with blend.gbuffers_entities = off. The backdrop
+-# quad (vertex colour 0,0,0, alpha = background opacity) is drawn last with no depth
+-# test, so it overwrites the glyph albedo in colortex1 with opaque black without
+-# writing depth: deferred shading then paints black text, a black backdrop over
+-# blocks and nothing at all over sky. Leaving the program enabled sends nametags to
+-# program/gbuffers_all_translucent, forward-shaded into colortex13 and composited by
+-# c1_blend_layers via
+-# blend.gbuffers_entities_translucent.colortex13 = ONE ONE_MINUS_SRC_ALPHA ...
+-#
+-# Scope: this moves EVERY ShaderKey.ENTITIES_TRANSLUCENT draw -- all
+-# RenderType.entityTranslucent* and itemEntityTranslucentCull geometry, not just
+-# nametags -- from the deferred path into the forward translucent layer, which is
+-# what upstream does on MC >= 26.01. Known consequences on this branch:
+-#   * armor/item glint still writes colortex3 and is applied by d4 to colortex1, so
+-#     glint on geometry that moved forward (enchanted translucent item entities) is
+-#     applied to the background albedo instead of to the item.
+-#   * translucent entities write depth before copyPreTranslucentDepth(), so where
+-#     their forward alpha < 1 the background behind them is shaded at their depth.
+-# The other three programs stay disabled and USE_SEPARATE_ENTITY_DRAWS stays
+-# undefined, so none of the eleven USE_SEPARATE_ENTITY_DRAWS sites change behaviour.
++# RMN fix 1 (rmnfix2 revision, 2026-09-06) -- nametags (photon issue #569) and Voxy.
++# Photon v1.3 shipped Iris' separateEntityDraws for every Minecraft version; v1.3a/v1.3b
++# (commits 65704f6/90451cc) turned it off below MC 26.1 and disabled the four translucent
++# programs, which is what made nametags black on 1.21.1 (#569, PR #570 restores v1.3).
++# The first rmnfix only re-enabled gbuffers_entities_translucent, so every entityTranslucent
++# draw (player skins, items, armor stands, slime skins, horse markings, ETF emissive overlays,
++# nametags) became a forward-layer draw made BEFORE Iris' pre-translucent depth copy - and
++# c1_blend_layers' Voxy guard then erased those texels wherever Voxy LOD terrain or LOD water
++# was behind them ("aspects of entities go transparent"). This revision restores the full
++# v1.3 configuration instead (see the lines below and settings.glsl), removes that guard the
++# way Photon main did (commit 1fac270) and, with the ported Voxy, defers Voxy's translucent
++# LOD pass until after entities (program/voxy.json "deferTranslucentRendering").
+ 
+-# Separate Entity Draws
+-#if MC_VERSION < 260100
+-program.world0/gbuffers_entities_translucent.enabled   = true
+-program.world0/gbuffers_block_translucent.enabled      = false
+-program.world0/gbuffers_particles.enabled              = false
+-program.world0/gbuffers_particles_translucent.enabled  = false
+-program.world1/gbuffers_entities_translucent.enabled   = true
+-program.world1/gbuffers_block_translucent.enabled      = false
+-program.world1/gbuffers_particles.enabled              = false
+-program.world1/gbuffers_particles_translucent.enabled  = false
+-program.world-1/gbuffers_entities_translucent.enabled  = true
+-program.world-1/gbuffers_block_translucent.enabled     = false
+-program.world-1/gbuffers_particles.enabled             = false
+-program.world-1/gbuffers_particles_translucent.enabled = false
+-#endif
++# photon_v1.3b-rmnfix2 (option B): Photon v1.3 behaviour - Iris draws translucent entities,
++# translucent block entities and translucent particles after the translucent terrain
++# (separateEntityDraws), so all four programs stay enabled on every Minecraft version.
++separateEntityDraws = true
+ 
+ # ----------------
+ #   Buffer Flips

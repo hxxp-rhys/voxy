@@ -42,6 +42,21 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
         }
     }
 
+    // Deferred translucent LODs (voxy.json "deferTranslucentRendering"): drawn at the very start of the TRANSLUCENT pass,
+    // before Sodium's begin() binds its program/framebuffer (so nothing of Sodium's setup is disturbed) and before any
+    // translucent terrain, i.e. after entities/block entities and, under Iris, after copyPreTranslucentDepth and the
+    // deferred programs. The vanilla depth of that moment is the main render target's depth texture, which every Iris
+    // gbuffer framebuffer shares (see VoxyRenderSystem.renderDeferredTranslucent).
+    @Inject(method = "render", at = @At("HEAD"))
+    private void voxy$deferredTranslucent(ChunkRenderMatrices matrices, CommandList commandList, ChunkRenderListIterable renderLists, TerrainRenderPass renderPass, CameraTransform camera, boolean indexedRenderingEnabled, CallbackInfo ci) {
+        if (renderPass == DefaultTerrainRenderPasses.TRANSLUCENT && !IrisUtil.irisShadowActive()) {
+            var renderer = IVoxyRenderSystemHolder.getNullable();
+            if (renderer != null) {
+                renderer.renderDeferredTranslucent();
+            }
+        }
+    }
+
     @Inject(method = "render", at = @At(value = "INVOKE", target = "Lnet/caffeinemc/mods/sodium/client/render/chunk/ShaderChunkRenderer;end(Lnet/caffeinemc/mods/sodium/client/render/chunk/terrain/TerrainRenderPass;)V", shift = At.Shift.BEFORE))
     private void voxy$injectRender(ChunkRenderMatrices matrices, CommandList commandList, ChunkRenderListIterable renderLists, TerrainRenderPass renderPass, CameraTransform camera, boolean indexedRenderingEnabled, CallbackInfo ci) {
         this.doRender(matrices, renderPass, camera);
@@ -65,6 +80,9 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
                 // 1.21.1: TerrainRenderPass has no render target, the depth/colour textures and the size are taken
                 // from the currently bound draw framebuffer (contract C3: {depthTex, colourTex, width, height})
                 int[] target = VoxyRenderSystem.getBoundFramebufferTextures();
+                if (target == null) {
+                    return;//Not a framebuffer the LODs can be composited into (see getBoundFramebufferTextures)
+                }
                 Viewport<?> viewport = null;
                 if (IrisUtil.USED_IRIS_VIEWPORT) {
                     viewport = renderer.getViewport();
